@@ -41,6 +41,7 @@ export const apps = [
     icon: "👻",
     dir: `${HOME}/Code/mcpfantom`,
     port: 3848, // HTTP server (config/fantomMcpServer-config.json)
+    path: "/dashboard/", // web UI lives under /dashboard/
     log: "logs/server.log",
     actions: [
       { group: "Lifecycle", label: "Start (HTTP)", icon: "▶️", cmd: "bash scripts/start-server.sh",   popup: "dialog" },
@@ -61,6 +62,7 @@ export const apps = [
     icon: "⚡",
     dir: `${HOME}/Code/axon-mcp-server`,
     port: 3847, // HTTP server (MCP_PORT) — dashboard / health / admin
+    path: "/dashboard/", // web UI lives under /dashboard/
     log: "/tmp/axon-mcp-server.log",
     actions: [
       { group: "Lifecycle", label: "Start (HTTP)", icon: "▶️", cmd: "bash scripts/start-server.sh",   popup: "dialog" },
