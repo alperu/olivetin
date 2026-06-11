@@ -105,39 +105,35 @@ Then `open build/OliveTin.app` (or double-click it in Finder). Drag it to
 
 ---
 
-## 5. Start automatically on login / restart
+## 5. Lifecycle: the app owns the service
 
-Two complementary options — this repo uses **(A)**, the most reliable:
+This app uses the **`Text Window`** interface (Dock icon + a window showing
+OliveTin's live log). The launcher runs OliveTin in the **foreground** and traps
+exit, so:
 
-### A. LaunchAgent (recommended) — runs OliveTin headless at login
+- **Open the app** → OliveTin starts, the WebUI opens, the log streams in the
+  window.
+- **Quit the app** (Cmd-Q / close window) → the trap **stops OliveTin**.
 
-`~/Library/LaunchAgents/app.olivetin.plist` (already installed) runs the
-OliveTin binary itself with `RunAtLoad` + `KeepAlive`, so it comes up on every
-login/restart and is restarted if it crashes. Manage it with:
-
-```bash
-UID=$(id -u)
-launchctl bootstrap gui/$UID ~/Library/LaunchAgents/app.olivetin.plist  # enable
-launchctl kickstart -k gui/$UID/app.olivetin                            # restart
-launchctl bootout    gui/$UID/app.olivetin                              # disable
-```
-
-With the server already auto-running, the `.app` just opens the WebUI (its
-launcher detects the running server and skips starting a second copy).
-
-### B. Login Item — auto-launch the .app instead
-
-If you'd rather the **app** open on login (e.g. to also pop the browser):
+Because the app owns the service, there is **no** `KeepAlive` LaunchAgent (an
+always-on agent would fight "quit = shutdown" by restarting the server). For
+**start-on-login/restart**, the app is registered as a **Login Item**:
 
 ```bash
+# Add (done by setup):
 osascript -e 'tell application "System Events" to make login item \
-  at end with properties {path:"/Users/alper/Code/olivetin/build/OliveTin.app", hidden:false}'
+  at end with properties {path:"/Applications/OliveTin.app", hidden:false}'
+
+# Remove:
+osascript -e 'tell application "System Events" to delete login item "OliveTin"'
 ```
 
-Or: System Settings → General → Login Items → **+**.
+Or manage it in System Settings → General → Login Items.
 
-> Don't enable both A *and* B expecting two servers — the launcher is
-> idempotent and won't start OliveTin twice on the same port.
+> If you'd rather have an always-on background server that survives the app
+> closing, use a `KeepAlive` LaunchAgent instead and build the app with
+> `-o None -R` (the launcher then just opens the browser). The two models are
+> mutually exclusive — pick one.
 
 ---
 

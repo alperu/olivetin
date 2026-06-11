@@ -1,23 +1,48 @@
 #!/bin/bash
-# olivetin-launch.sh — launched by the OliveTin.app (Platypus wrapper).
-# Starts OliveTin if it isn't already listening, then opens the WebUI.
-# OliveTin keeps running after this script (and the .app) exits.
+# olivetin-launch.sh — run by OliveTin.app (Platypus "Text Window" interface).
+#
+# Runs OliveTin in the FOREGROUND and streams its log into the app window so you
+# can see the status. The app stays open while OliveTin runs; QUITTING the app
+# (Cmd-Q / closing the window) STOPS OliveTin via the cleanup trap.
 
 OT="$HOME/.local/opt/olivetin"
 PORT="1337"
 URL="http://localhost:${PORT}"
 
-cd "$OT" || exit 1
+OT_PID=""
+cleanup() {
+  echo ""
+  echo "==> Stopping OliveTin..."
+  [ -n "$OT_PID" ] && kill "$OT_PID" 2>/dev/null
+  # Make sure no OliveTin we own is left behind on this port.
+  pkill -x OliveTin 2>/dev/null
+}
+trap cleanup EXIT INT TERM
 
-if ! /usr/sbin/lsof -i ":${PORT}" -sTCP:LISTEN -t >/dev/null 2>&1; then
-  # Detach so OliveTin survives this script/app exiting.
-  nohup "$OT/OliveTin" >/tmp/olivetin.log 2>&1 &
-  disown
-  # Wait (up to ~6s) for the port to come up before opening the browser.
+cd "$OT" || { echo "OliveTin dir not found: $OT"; exit 1; }
+
+if /usr/sbin/lsof -i ":${PORT}" -sTCP:LISTEN -t >/dev/null 2>&1; then
+  echo "==> OliveTin already listening on :${PORT}."
+else
+  echo "==> Starting OliveTin..."
+  "$OT/OliveTin" 2>&1 &
+  OT_PID=$!
   for _ in $(seq 1 20); do
     /usr/sbin/lsof -i ":${PORT}" -sTCP:LISTEN -t >/dev/null 2>&1 && break
     sleep 0.3
   done
 fi
 
+echo "==> OliveTin is running. Opening ${URL}"
 open "$URL"
+echo ""
+echo "  Close this window (or press Cmd-Q) to STOP OliveTin."
+echo "------------------------------------------------------------"
+echo ""
+
+# Keep the app alive and show OliveTin's live output in this window.
+if [ -n "$OT_PID" ]; then
+  wait "$OT_PID"
+else
+  while /usr/sbin/lsof -i ":${PORT}" -sTCP:LISTEN -t >/dev/null 2>&1; do sleep 2; done
+fi

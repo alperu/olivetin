@@ -84,6 +84,22 @@ for (const app of apps) {
 allActions.push(...actionsFor("chrome-mcp", chromeMcp.dir, chromeMcp.actions));
 allDashboards.push(dashboardFor("chrome-mcp", chromeMcp.title, chromeMcp.icon, chromeMcp.actions));
 
+// Home landing page — FIRST dashboard so OliveTin opens here instead of the
+// first project. One clickable card per project, linking to its dashboard.
+// A project's dashboard route is /dashboards/<urlencoded tab title>.
+function buildHomeDashboard(dashboards) {
+  const cards = dashboards.map((d) => {
+    const href = `/dashboards/${encodeURIComponent(d.tab)}`;
+    const parts = d.tab.trim().split(/\s+/);
+    const icon = parts[0];
+    const name = parts.slice(1).join(" ");
+    return `<a class='project-card' href='${href}'><span class='ic'>${icon}</span><span class='nm'>${name}</span></a>`;
+  }).join("");
+  const html = `<div class='project-home'>${cards}</div>`;
+  return { tab: "🏠  Home", home: true, html };
+}
+allDashboards.unshift(buildHomeDashboard(allDashboards.slice()));
+
 // ---------------------------------------------------------------------------
 // Serialize config.yaml
 // ---------------------------------------------------------------------------
@@ -140,6 +156,16 @@ function emitDashboards(dashboards) {
   for (const d of dashboards) {
     out += `  - title: ${q(d.tab)}\n`;
     out += `    contents:\n`;
+    if (d.home) {
+      out += `      - title: ${q("Projects")}\n`;
+      out += `        type: fieldset\n`;
+      out += `        contents:\n`;
+      out += `          - type: display\n`;
+      out += `            cssClass: ${q("home")}\n`;
+      out += `            title: ${q(d.html)}\n`;
+      out += "\n";
+      continue;
+    }
     if (d.entity) {
       // Running/stopped color indicator at the top of the tab.
       out += `      - title: ${q("Status")}\n`;
@@ -248,6 +274,37 @@ nav {
   top: 0;
   z-index: 1000;
 }
+
+/* Home landing page — grid of clickable project cards. */
+div.display.home { width: 100%; }
+.project-home {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  justify-content: center;
+  padding: 1rem 0;
+}
+.project-home a.project-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 170px;
+  height: 130px;
+  gap: .5rem;
+  border: 1px solid var(--border-color, #ccc);
+  border-radius: .7em;
+  text-decoration: none;
+  color: inherit;
+  background: var(--bg, #f8f9fa);
+  transition: transform .12s, box-shadow .12s;
+}
+.project-home a.project-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 4px 14px rgba(0,0,0,.15);
+}
+.project-home a.project-card .ic { font-size: 2.4rem; line-height: 1; }
+.project-home a.project-card .nm { font-weight: 600; text-align: center; }
 
 /* Per-app running/stopped Status display colors. */
 div.display.status-running {

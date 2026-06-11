@@ -30,11 +30,15 @@ echo "==> decoding ScriptExec"
 base64 -d -i "$RES/ScriptExec.b64" > ScriptExec && chmod +x ScriptExec
 
 # 3. Build the .app.
+#    Interface "Text Window" keeps a Dock icon + a window showing OliveTin's
+#    live log while it runs. No -R: the app stays open until you quit it, and
+#    quitting stops OliveTin (see olivetin-launch.sh's cleanup trap).
 echo "==> building OliveTin.app"
 chmod +x olivetin-launch.sh
 "$PLATYPUS" \
-  -y -a "OliveTin" -o "None" -p "/bin/bash" \
-  -i "OliveTin.icns" -V "1.0" -u "alper" -I "app.olivetin.launcher" -R \
+  -y -a "OliveTin" -o "Text Window" -p "/bin/bash" \
+  -i "OliveTin.icns" -V "1.0" -u "alper" -I "app.olivetin.launcher" \
+  -n "Monaco 11" \
   -e "$HERE/ScriptExec" \
   -E "$RES/MainMenu.nib" \
   "olivetin-launch.sh" "OliveTin.app"
