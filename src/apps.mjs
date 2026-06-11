@@ -106,8 +106,11 @@ export const chromeMcp = {
   icon: "🌐",
   dir: `${HOME}/Code/court-lens-mcp`,
   actions: [
-    { group: "Launch", label: "Run Chrome MCP",       icon: "🌐", cmd: "bash scripts/chromeMcpRun.sh",         popup: "dialog" },
-    { group: "Launch", label: "Run Chrome MCP /search", icon: "🔎", cmd: "bash scripts/chromeMcpRun.sh /search", popup: "dialog" },
+    // Default: launch the MCP Chrome and open its CDP info page (:9222) so you
+    // can confirm it's the MCP-enabled instance.
+    { group: "Launch", label: "Run Chrome MCP",       icon: "🌐", cmd: "bash scripts/chromeMcpRun.sh",            popup: "dialog" },
+    // Same MCP Chrome, but open the app under test on :3000 for debugging.
+    { group: "Launch", label: "Run Chrome MCP (app :3000)", icon: "🔎", cmd: "PORT=3000 bash scripts/chromeMcpRun.sh /", popup: "dialog" },
     // Stop the debug Chrome by its unique user-data-dir so we don't touch the
     // user's normal Chrome windows.
     { group: "Launch", label: "Stop Chrome MCP", icon: "⏹️", cmd: 'pkill -f "claude-debug-chrome" && echo "Stopped Chrome MCP" || echo "Chrome MCP not running"', popup: "output" },
