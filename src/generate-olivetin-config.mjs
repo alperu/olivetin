@@ -91,6 +91,7 @@ function dashboardFor(appId, title, icon, defs, { entity } = {}) {
 
 const allActions = [];
 const allDashboards = [];
+const warpConfigs = []; // Warp launch configs to write on --install
 
 for (const app of apps) {
   // Per-project shortcuts: open its web UI in a browser tab (so you don't have
@@ -111,7 +112,25 @@ for (const app of apps) {
     { group: "Develop", label: "Open in IntelliJ", icon: "🧠", cmd: 'open -a "IntelliJ IDEA" .', popup: "output" },
   ];
   allActions.push(...actionsFor(app.id, app.dir, defs, { withStatusTrigger: true }));
-  allDashboards.push(dashboardFor(app.id, app.title, app.icon, defs, { entity: entityName(app.id) }));
+  const dash = dashboardFor(app.id, app.title, app.icon, defs, { entity: entityName(app.id) });
+  // "Refresh logs" in the Status section — reuses this app's Tail logs command
+  // so you can re-pull the latest log snapshot on demand.
+  const logAct = app.actions.find((a) => /tail logs/i.test(a.label));
+  if (logAct) {
+    const t = `${app.id}: Refresh logs`;
+    allActions.push({ title: t, shell: `cd ${app.dir} && ${logAct.cmd}`, icon: "📜", popupOnStart: POPUP.output, timeout: 600 });
+    dash.refreshLogs = t;
+  }
+  // "Watch logs (Warp)" — opens a Warp tab live-tailing the log. Live streaming
+  // belongs in a terminal, not in OliveTin (which can't hold a stream open).
+  if (app.log) {
+    const cfgName = `${app.id}-logs`;
+    warpConfigs.push({ name: cfgName, dir: app.dir, title: `${app.title} logs`, log: app.log });
+    const t = `${app.id}: Watch logs (Warp)`;
+    allActions.push({ title: t, shell: `open "warp://launch/${cfgName}"`, icon: "🪵", popupOnStart: POPUP.output, timeout: 20 });
+    dash.watchLogs = t;
+  }
+  allDashboards.push(dash);
 }
 // Chrome MCP tab — running = a debug Chrome exposing CDP on :9222 (see probe).
 allActions.push(...actionsFor("chrome-mcp", chromeMcp.dir, chromeMcp.actions, { withStatusTrigger: true }));
@@ -226,6 +245,8 @@ function emitDashboards(dashboards) {
       out += `            cssClass: ${q(`status-{{ ${d.entity}.state }}`)}\n`;
       out += `            title: ${q(`{{ ${d.entity}.label }}`)}\n`;
       if (d.refresh) out += `          - title: ${q(d.refresh)}\n`;
+      if (d.refreshLogs) out += `          - title: ${q(d.refreshLogs)}\n`;
+      if (d.watchLogs) out += `          - title: ${q(d.watchLogs)}\n`;
     }
     for (const group of d.groups) {
       out += `      - title: ${q(group)}\n`;
@@ -466,7 +487,29 @@ function buildSidebarIconCss() {
   return css;
 }
 
+// Warp launch configuration — opens a tab in the app's dir tailing its log.
+function buildWarpConfig(c) {
+  return (
+    `---\n` +
+    `name: ${c.name}\n` +
+    `windows:\n` +
+    `  - tabs:\n` +
+    `      - title: ${JSON.stringify(c.title)}\n` +
+    `        layout:\n` +
+    `          cwd: ${JSON.stringify(c.dir)}\n` +
+    `          commands:\n` +
+    `            - exec: tail -n 200 -F ${c.log}\n`
+  );
+}
+
 function installAssets(olivetinDir) {
+  // Warp launch configs -> ~/.warp/launch_configurations/<name>.yaml
+  const warpDir = join(process.env.HOME, ".warp", "launch_configurations");
+  mkdirSync(warpDir, { recursive: true });
+  for (const c of warpConfigs) {
+    writeFileSync(join(warpDir, `${c.name}.yaml`), buildWarpConfig(c));
+  }
+
   // 1. Probe script -> build/
   const buildDir = join(REPO_ROOT, "build");
   mkdirSync(buildDir, { recursive: true });

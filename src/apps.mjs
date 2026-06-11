@@ -26,6 +26,7 @@ export const apps = [
     icon: "🔌",
     dir: `${HOME}/Code/mcp-proxy`,
     port: 9191, // single HTTP frontend / admin GUI
+    log: "logs/proxy.out logs/proxy.err", // tail target for live logs
     actions: [
       { group: "Lifecycle", label: "Start",   icon: "▶️", cmd: "bash scripts/start.sh",   popup: "dialog" },
       { group: "Lifecycle", label: "Stop",    icon: "⏹️", cmd: "bash scripts/stop.sh",    popup: "dialog" },
@@ -40,6 +41,7 @@ export const apps = [
     icon: "👻",
     dir: `${HOME}/Code/mcpfantom`,
     port: 3848, // HTTP server (config/fantomMcpServer-config.json)
+    log: "logs/server.log",
     actions: [
       { group: "Lifecycle", label: "Start (HTTP)", icon: "▶️", cmd: "bash scripts/start-server.sh",   popup: "dialog" },
       { group: "Lifecycle", label: "Start (dev)",  icon: "🛠️", cmd: "bash scripts/start-dev.sh",      popup: "dialog" },
@@ -59,6 +61,7 @@ export const apps = [
     icon: "⚡",
     dir: `${HOME}/Code/axon-mcp-server`,
     port: 3847, // HTTP server (MCP_PORT) — dashboard / health / admin
+    log: "/tmp/axon-mcp-server.log",
     actions: [
       { group: "Lifecycle", label: "Start (HTTP)", icon: "▶️", cmd: "bash scripts/start-server.sh",   popup: "dialog" },
       { group: "Lifecycle", label: "Stop",         icon: "⏹️", cmd: "bash scripts/stop-server.sh",    popup: "dialog" },
@@ -80,6 +83,7 @@ export const apps = [
     icon: "⚖️",
     dir: `${HOME}/Code/court-lens-mcp`,
     port: 3000, // Next.js dashboard
+    log: "logs/*.log",
     actions: [
       { group: "Lifecycle", label: "Start",   icon: "▶️", cmd: "bash scripts/start.sh",   popup: "dialog" },
       { group: "Lifecycle", label: "Stop",    icon: "⏹️", cmd: "bash scripts/stop.sh",    popup: "dialog" },
