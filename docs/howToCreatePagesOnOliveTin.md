@@ -184,3 +184,68 @@ node /Users/alper/Code/olivetin/src/generate-olivetin-config.mjs --install
 
 See [`src/`](../src/) for the generator that produces a tab per app
 automatically.
+
+---
+
+## 7. Caveats & gotchas (learned the hard way)
+
+These are real behaviours of OliveTin 3000.14.0 on this setup that cost time —
+the generator already works around them, but know them before hand-editing.
+
+> **Emoji in a dashboard title 404s the URL.**
+> A dashboard route is `/dashboards/<title>`. If the title contains an emoji
+> (e.g. `🌲  Sedona`), a full page load of
+> `/dashboards/%F0%9F%8C%B2%20%20Sedona` returns **404 page not found** from
+> OliveTin's server. Keep titles **clean** (no emoji) and paint per-app icons
+> back on with CSS / on the Home cards. Clean paths like
+> `/dashboards/Axon MCP Server` serve the SPA (200).
+
+> **A dot in a title also 404s on full load.**
+> `SoundSuite.ai` → `/dashboards/SoundSuite.ai` 404s because the server treats
+> `.ai` as a file extension. Clicking still works (client-side nav, below), but
+> a hard reload / bookmark of that exact URL 404s. Avoid `.` in titles if you
+> need reloadable deep links.
+
+> **`timeout: 0` is NOT "no timeout" — it's the 3-second default.**
+> An action with `timeout: 0` (or none) is **SIGKILLed after 3s** — you'll see
+> `signal: killed` and `… timed out after 3 seconds`. Anything long-running or
+> foreground (a server, the `exec chrome` launcher) must be **detached**
+> (`(nohup … &) ; echo launched`) so the action returns instantly, and/or given
+> an explicit large `timeout:`. The generator detaches every `Start`/`Run`
+> action and sets `timeout: 600` on the rest.
+
+> **Deep links need client-side navigation.**
+> OliveTin's nav and the Home cards switch dashboards via the History API. A
+> raw `<a href>` that triggers a full load is at the mercy of the 404 rules
+> above. The Home cards use an inline `onclick` doing
+> `window.history.pushState(...)` + `window.dispatchEvent(new PopStateEvent('popstate'))`.
+
+> **In an inline `onclick`, qualify globals with `window.`**
+> Bare `dispatchEvent(...)` in an inline handler binds to **`document`**, but
+> OliveTin's router listens for `popstate` on **`window`** — so the event never
+> arrives and nothing navigates. Use `window.dispatchEvent(...)` /
+> `window.history.pushState(...)`.
+
+> **Sidebar DOM shape (for theming).**
+> The nav is `aside.sidebar > nav.mainnav > ul.navigation-links > li > a`
+> (each `<a>` has an inline SVG). Your **dashboards are listed first**, then
+> OliveTin's built-ins (`Entities`, `Logs`, `Diagnostics`), so
+> `li:nth-child(n)` maps cleanly to your dashboard order — that's how the
+> generator paints per-app emoji into the sidebar without touching the URLs.
+
+> **A fieldset is a CSS grid; a display occupies one cell.**
+> On a dashboard, OliveTin renders the fieldset as `display: grid`, so a
+> `type: display` lands in a single ~200px column. To make a full-width display
+> (e.g. the Home icon grid) set `grid-column: 1 / -1; width: 100%`.
+
+> **Status colours need entity files, and only rewrite on change.**
+> Running/stopped colour uses an entity JSON per app + a `type: display` with
+> `cssClass: status-{{ entity.state }}`. OliveTin reloads + re-renders the
+> dashboard whenever the entity file's mtime changes, so the status probe must
+> **only write when the value actually changes** — otherwise the dashboard
+> flickers "Loading dashboard…" on every refresh.
+
+> **Theme CSS caching.**
+> Set `themeName:` to enable a theme and `themeCacheDisabled: true` so
+> `theme.css` is re-read per request while iterating. Browsers still cache the
+> file — hard-refresh (⌘⇧R) to see CSS changes.

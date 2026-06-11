@@ -108,5 +108,8 @@ export const chromeMcp = {
   actions: [
     { group: "Launch", label: "Run Chrome MCP",       icon: "🌐", cmd: "bash scripts/chromeMcpRun.sh",         popup: "dialog" },
     { group: "Launch", label: "Run Chrome MCP /search", icon: "🔎", cmd: "bash scripts/chromeMcpRun.sh /search", popup: "dialog" },
+    // Stop the debug Chrome by its unique user-data-dir so we don't touch the
+    // user's normal Chrome windows.
+    { group: "Launch", label: "Stop Chrome MCP", icon: "⏹️", cmd: 'pkill -f "claude-debug-chrome" && echo "Stopped Chrome MCP" || echo "Chrome MCP not running"', popup: "output" },
   ],
 };

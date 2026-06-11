@@ -100,9 +100,9 @@ for (const app of apps) {
   allActions.push(...actionsFor(app.id, app.dir, defs, { withStatusTrigger: true }));
   allDashboards.push(dashboardFor(app.id, app.title, app.icon, defs, { entity: entityName(app.id) }));
 }
-// Chrome MCP tab — no running-state indicator (it's a launcher, not a service).
-allActions.push(...actionsFor("chrome-mcp", chromeMcp.dir, chromeMcp.actions));
-allDashboards.push(dashboardFor("chrome-mcp", chromeMcp.title, chromeMcp.icon, chromeMcp.actions));
+// Chrome MCP tab — running = a debug Chrome exposing CDP on :9222 (see probe).
+allActions.push(...actionsFor("chrome-mcp", chromeMcp.dir, chromeMcp.actions, { withStatusTrigger: true }));
+allDashboards.push(dashboardFor("chrome-mcp", chromeMcp.title, chromeMcp.icon, chromeMcp.actions, { entity: entityName("chrome-mcp") }));
 
 // Home landing page — FIRST dashboard so OliveTin opens here instead of the
 // first project. One clickable card per project, linking to its dashboard.
@@ -166,8 +166,8 @@ function emitActions(actions, refreshAction) {
 
 function emitEntities(olivetinDir) {
   let out = "entities:\n";
-  for (const app of apps) {
-    const name = entityName(app.id);
+  const names = [...apps.map((a) => entityName(a.id)), entityName("chrome-mcp")];
+  for (const name of names) {
     out += `  - file: ${q(join(olivetinDir, "entities", `${name}.json`))}\n`;
     out += `    name: ${name}\n`;
   }
@@ -292,6 +292,13 @@ function buildProbeScript(olivetinDir) {
   for (const app of apps) {
     lines.push(`emit ${entityName(app.id)} "${app.dir}"`);
   }
+  // Chrome MCP: running = a debug Chrome exposing CDP on :9222.
+  lines.push("");
+  lines.push("# Chrome MCP — running if CDP is reachable on :9222.");
+  lines.push('if curl -s --max-time 1 -o /dev/null http://localhost:9222/json/version; then cs=running; cl=RUNNING; else cs=stopped; cl=STOPPED; fi');
+  lines.push(`cf="$ENT_DIR/${entityName("chrome-mcp")}.json"`);
+  lines.push('cnew=$(printf \'{"state":"%s","label":"%s"}\' "$cs" "$cl")');
+  lines.push('if [ "$cnew" != "$(cat "$cf" 2>/dev/null)" ]; then printf \'%s\\n\' "$cnew" > "$cf"; fi');
   lines.push("");
   return lines.join("\n");
 }
@@ -364,36 +371,43 @@ body:has(nav.mainnav) main { margin-left: 240px !important; }
   body:has(nav.mainnav) main { margin-left: 60px !important; }
 }
 
-/* Home landing page — grid of clickable project cards. */
-div.display.home { width: 100%; }
+/* Home landing page — iPad-style icon grid. The display sits in one cell of
+   OliveTin's fieldset grid, so span all columns and lay out squircle icons. */
+div.display.home { grid-column: 1 / -1 !important; width: 100% !important; display: block !important; }
+div.display.home > * { width: 100% !important; }
 .project-home {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 1rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, 120px);
   justify-content: center;
-  padding: 1rem 0;
+  gap: 1.6rem 1.2rem;
+  width: 100%;
+  padding: 1.5rem 0;
 }
 .project-home a.project-card {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
-  width: 170px;
-  height: 130px;
-  gap: .5rem;
-  border: 1px solid var(--border-color, #ccc);
-  border-radius: .7em;
+  gap: .55rem;
+  width: 120px;
+  border: none;
+  background: none;
   text-decoration: none;
   color: inherit;
-  background: var(--bg, #f8f9fa);
-  transition: transform .12s, box-shadow .12s;
 }
-.project-home a.project-card:hover {
-  transform: translateY(-3px);
-  box-shadow: 0 4px 14px rgba(0,0,0,.15);
+.project-home a.project-card .ic {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 84px;
+  height: 84px;
+  font-size: 2.7rem;
+  background: #fff;
+  border-radius: 22px;
+  box-shadow: 0 3px 10px rgba(0,0,0,.18);
+  transition: transform .12s;
 }
-.project-home a.project-card .ic { font-size: 2.4rem; line-height: 1; }
-.project-home a.project-card .nm { font-weight: 600; text-align: center; }
+.project-home a.project-card:hover .ic { transform: scale(1.06); }
+.project-home a.project-card .nm { font-size: .85rem; font-weight: 500; text-align: center; line-height: 1.2; }
 
 /* Per-app running/stopped Status display colors. */
 div.display.status-running {
