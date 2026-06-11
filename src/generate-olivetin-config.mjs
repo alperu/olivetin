@@ -281,7 +281,7 @@ function buildConfig(olivetinDir) {
   const { listen } = readServerSettings(olivetinDir);
   const refreshAction = {
     title: REFRESH_TITLE,
-    shell: `bash ${join(REPO_ROOT, "build", "status-probe.sh")} ${join(olivetinDir, "entities")}`,
+    shell: `bash ${join(REPO_ROOT, "build", "status-probe.sh")} ${join(olivetinDir, "entities")} ${join(olivetinDir, "custom-webui", "themes", THEME_NAME)}`,
     icon: "🔄",
     popupOnStart: POPUP.output,
     timeout: 30,
@@ -319,40 +319,58 @@ function buildProbeScript(olivetinDir) {
     "# mutually exclusive; cwd-based detection keeps them distinguishable.",
     "",
     `ENT_DIR="\${1:-${join(olivetinDir, "entities")}}"`,
+    `THEME_DIR="\${2:-${join(olivetinDir, "custom-webui", "themes", THEME_NAME)}}"`,
     'mkdir -p "$ENT_DIR"',
+    "",
+    "# Accumulates the sidebar status-dot CSS (one colored dot per nav row).",
+    'DOTS="/* status-dots.css — GENERATED each probe; colors the left-menu dots. */"',
+    'GREEN="#1db954"; RED="#e0245e"',
     "",
     "cwd_running() {",
     '  local dir="$1"',
     "  lsof -a -c node -c bash -c npm -c tsx -d cwd -Fn 2>/dev/null | grep -q \"^n${dir}\"",
     "}",
     "",
-    "emit() { # entityName appDir",
-    '  local name="$1" dir="$2" state label new old f',
-    '  if cwd_running "$dir"; then state=running; label=RUNNING; else state=stopped; label=STOPPED; fi',
+    "add_dot() { # navIndex color",
+    '  DOTS="$DOTS',
+    'nav.mainnav ul.navigation-links li:nth-child($1) > a::after { content: \\"\\\\25CF\\"; margin-left: auto; padding-left: .5em; font-size: .8em; color: $2; }"',
+    "}",
+    "",
+    "emit() { # entityName appDir navIndex",
+    '  local name="$1" dir="$2" idx="$3" state label color new old f',
+    '  if cwd_running "$dir"; then state=running; label=RUNNING; color="$GREEN"; else state=stopped; label=STOPPED; color="$RED"; fi',
     '  f="$ENT_DIR/$name.json"',
     '  new=$(printf \'{"state":"%s","label":"%s"}\' "$state" "$label")',
     '  old=$(cat "$f" 2>/dev/null)',
     "  # Only rewrite when the status actually changed — otherwise OliveTin",
     "  # reloads the entity file and re-renders the dashboard every minute.",
     '  if [ "$new" != "$old" ]; then printf \'%s\\n\' "$new" > "$f"; fi',
+    '  add_dot "$idx" "$color"',
     "}",
     "",
   ];
-  for (const app of apps) {
-    lines.push(`emit ${entityName(app.id)} "${app.dir}"`);
-  }
+  // nav order: Home is li:nth-child(1), then apps, then Chrome.
+  apps.forEach((app, i) => {
+    lines.push(`emit ${entityName(app.id)} "${app.dir}" ${i + 2}`);
+  });
   // Chrome MCP: running = a debug Chrome exposing CDP on :9222.
   lines.push("");
   lines.push("# Chrome MCP — running if CDP is reachable on :9222.");
-  lines.push('if curl -s --max-time 1 -o /dev/null http://localhost:9222/json/version; then cs=running; cl=RUNNING; else cs=stopped; cl=STOPPED; fi');
+  lines.push('if curl -s --max-time 1 -o /dev/null http://localhost:9222/json/version; then cs=running; cl=RUNNING; ccolor="$GREEN"; else cs=stopped; cl=STOPPED; ccolor="$RED"; fi');
   lines.push(`cf="$ENT_DIR/${entityName("chrome-mcp")}.json"`);
   lines.push('cnew=$(printf \'{"state":"%s","label":"%s"}\' "$cs" "$cl")');
   lines.push('if [ "$cnew" != "$(cat "$cf" 2>/dev/null)" ]; then printf \'%s\\n\' "$cnew" > "$cf"; fi');
+  lines.push(`add_dot ${apps.length + 2} "$ccolor"`);
+  lines.push("");
+  lines.push("# Write the sidebar dot CSS (only when it changed, to avoid churn).");
+  lines.push('df="$THEME_DIR/status-dots.css"');
+  lines.push('if [ "$DOTS" != "$(cat "$df" 2>/dev/null)" ]; then printf \'%s\\n\' "$DOTS" > "$df"; fi');
   lines.push("");
   return lines.join("\n");
 }
 
-const THEME_CSS = `/* mcpstatus theme — GENERATED. */
+const THEME_CSS = `@import "/custom-webui/themes/${THEME_NAME}/status-dots.css";
+/* mcpstatus theme — GENERATED. */
 
 /* ===========================================================================
    iOS-style left sidebar. OliveTin renders <aside class="sidebar"> >
@@ -521,12 +539,15 @@ function installAssets(olivetinDir) {
   const themeDir = join(olivetinDir, "custom-webui", "themes", THEME_NAME);
   mkdirSync(themeDir, { recursive: true });
   writeFileSync(join(themeDir, "theme.css"), THEME_CSS + buildSidebarIconCss());
+  // Seed status-dots.css so the theme's @import resolves before the first probe.
+  const dotsPath = join(themeDir, "status-dots.css");
+  if (!existsSync(dotsPath)) writeFileSync(dotsPath, "/* status-dots.css — populated by the status probe. */\n");
 
   // 3. Entities dir + seed one probe run so files exist before OliveTin reads them.
   const entDir = join(olivetinDir, "entities");
   mkdirSync(entDir, { recursive: true });
   try {
-    execFileSync("bash", [probePath, entDir], { stdio: "inherit" });
+    execFileSync("bash", [probePath, entDir, themeDir], { stdio: "inherit" });
   } catch {
     // Probe is best-effort; seed empty stopped files if it failed.
     for (const app of apps) {
