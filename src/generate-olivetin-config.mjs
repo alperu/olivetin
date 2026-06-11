@@ -92,9 +92,13 @@ const allActions = [];
 const allDashboards = [];
 
 for (const app of apps) {
-  // "Open in IntelliJ" added to every project so you can jump into the code.
+  // Per-project shortcuts: open its web UI in a browser tab (so you don't have
+  // to remember ports) and open the code in IntelliJ.
   const defs = [
     ...app.actions,
+    ...(app.port
+      ? [{ group: "Open", label: `Open web UI (:${app.port})`, icon: "🌐", cmd: `open "http://localhost:${app.port}"`, popup: "output" }]
+      : []),
     { group: "Develop", label: "Open in IntelliJ", icon: "🧠", cmd: 'open -a "IntelliJ IDEA" .', popup: "output" },
   ];
   allActions.push(...actionsFor(app.id, app.dir, defs, { withStatusTrigger: true }));
