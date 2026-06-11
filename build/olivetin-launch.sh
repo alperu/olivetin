@@ -22,8 +22,10 @@ trap cleanup EXIT INT TERM
 
 cd "$OT" || { echo "OliveTin dir not found: $OT"; exit 1; }
 
+ALREADY=""
 if /usr/sbin/lsof -i ":${PORT}" -sTCP:LISTEN -t >/dev/null 2>&1; then
   STATUS="already running"
+  ALREADY=1
 else
   # Send OliveTin's verbose log to a file — keep this window clean.
   : > "$LOG"
@@ -36,7 +38,14 @@ else
   STATUS="started"
 fi
 
-open "$URL"
+# Only open a browser tab when we actually STARTED the server. OliveTin holds a
+# persistent EventStream per tab and its HTTP/1.1 frontend caps connections per
+# host (~6), so spawning a fresh tab on every launch piles up tabs until new
+# dashboards hang on "Loading dashboard…". If it's already running, reuse your
+# existing tab.
+if [ -z "$ALREADY" ]; then
+  open "$URL"
+fi
 
 echo "╭───────────────────────────────────────────────╮"
 echo "│            OliveTin  —  $STATUS"
