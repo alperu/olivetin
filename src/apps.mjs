@@ -22,7 +22,7 @@ export const POPUP = {
 export const apps = [
   {
     id: "mcp-proxy",
-    title: "mcp-proxy",
+    title: "MCP Proxy Server",
     icon: "🔌",
     dir: `${HOME}/Code/mcp-proxy`,
     actions: [

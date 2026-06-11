@@ -38,6 +38,7 @@ const DEFAULT_OLIVETIN_DIR = `${process.env.HOME}/.local/opt/olivetin`;
 const REPO_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const THEME_NAME = "mcpstatus";
 const REFRESH_TITLE = "status: Refresh";
+const HOME_TAB = "🏠  Home";
 
 // ---------------------------------------------------------------------------
 // Tiny YAML scalar emitter (no deps — we only emit shapes we control).
@@ -96,7 +97,7 @@ function buildHomeDashboard(dashboards) {
     return `<a class='project-card' href='${href}'><span class='ic'>${icon}</span><span class='nm'>${name}</span></a>`;
   }).join("");
   const html = `<div class='project-home'>${cards}</div>`;
-  return { tab: "🏠  Home", home: true, html };
+  return { tab: HOME_TAB, home: true, html };
 }
 allDashboards.unshift(buildHomeDashboard(allDashboards.slice()));
 
@@ -224,7 +225,9 @@ function buildConfig(olivetinDir) {
     `# One tab per MCP application + a Chrome MCP tab + running/stopped colors.\n` +
     `# ============================================================================\n\n` +
     `listenAddressSingleHTTPFrontend: ${listen}\n` +
-    `logLevel: "${logLevel}"\n` +
+    // WARN keeps the app window quiet — INFO logs every entity reload and the
+    // per-minute status action. (was: ${logLevel})
+    `logLevel: "WARN"\n` +
     `themeName: ${THEME_NAME}\n` +
     `themeCacheDisabled: true\n\n`;
   return header + emitActions(allActions, refreshAction) + emitEntities(olivetinDir) + emitDashboards(allDashboards);
@@ -253,9 +256,14 @@ function buildProbeScript(olivetinDir) {
     "}",
     "",
     "emit() { # entityName appDir",
-    '  local name="$1" dir="$2" state label',
+    '  local name="$1" dir="$2" state label new old f',
     '  if cwd_running "$dir"; then state=running; label=RUNNING; else state=stopped; label=STOPPED; fi',
-    '  printf \'{"state":"%s","label":"%s"}\\n\' "$state" "$label" > "$ENT_DIR/$name.json"',
+    '  f="$ENT_DIR/$name.json"',
+    '  new=$(printf \'{"state":"%s","label":"%s"}\' "$state" "$label")',
+    '  old=$(cat "$f" 2>/dev/null)',
+    "  # Only rewrite when the status actually changed — otherwise OliveTin",
+    "  # reloads the entity file and re-renders the dashboard every minute.",
+    '  if [ "$new" != "$old" ]; then printf \'%s\\n\' "$new" > "$f"; fi',
     "}",
     "",
   ];
@@ -268,11 +276,75 @@ function buildProbeScript(olivetinDir) {
 
 const THEME_CSS = `/* mcpstatus theme — GENERATED. */
 
-/* Pin the navigation menu to the top so the tabs stay visible while scrolling. */
-nav {
-  position: sticky;
+/* ===========================================================================
+   iOS-style left sidebar: reflow the top dashboard nav into a fixed vertical
+   app list shown on every page. Scoped with :has(> ul) so OliveTin's inner
+   component navs (which use flex/divs, not a direct <ul>) are left untouched.
+   =========================================================================== */
+nav:has(> ul) {
+  position: fixed;
   top: 0;
+  left: 0;
+  bottom: 0;
+  width: 240px;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 1rem .6rem;
+  overflow-y: auto;
+  background: #f2f2f7;
+  border-right: 1px solid #d1d1d6;
+  border-radius: 0;
   z-index: 1000;
+}
+nav:has(> ul)::before {
+  content: "Applications";
+  display: block;
+  padding: .2rem .8rem .7rem;
+  font-size: .72rem;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: #8e8e93;
+}
+nav:has(> ul) ul {
+  display: flex;
+  flex-direction: column;
+  gap: .15rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+nav:has(> ul) li,
+nav:has(> ul) ul li { display: block; margin: 0; }
+nav:has(> ul) a {
+  display: flex;
+  align-items: center;
+  gap: .55rem;
+  padding: .6rem .8rem;
+  border-radius: 12px;
+  color: #1c1c1e;
+  font-size: 1rem;
+  font-weight: 500;
+  text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+nav:has(> ul) a:hover { background: rgba(120,120,128,.16); }
+nav:has(> ul) a.active,
+nav:has(> ul) a.selected,
+nav:has(> ul) a[aria-current="page"] {
+  background: #007aff;
+  color: #fff;
+}
+/* Push page content clear of the fixed sidebar. Scoped to body:has(nav > ul)
+   so if the sidebar ever doesn't apply, the layout falls back cleanly. */
+body:has(nav > ul) main { margin-left: 240px; }
+@media (max-width: 760px) {
+  nav:has(> ul) { width: 60px; padding: 1rem .35rem; }
+  nav:has(> ul)::before { display: none; }
+  nav:has(> ul) a { justify-content: center; padding: .55rem; font-size: 1.2rem; }
+  body:has(nav > ul) main { margin-left: 60px; }
 }
 
 /* Home landing page — grid of clickable project cards. */
