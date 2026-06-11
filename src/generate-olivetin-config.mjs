@@ -85,8 +85,7 @@ function dashboardFor(appId, title, icon, defs, { entity } = {}) {
     byGroup.get(a.group).push(a);
   }
   // tab = clean route/display title; icon kept separately for the Home cards.
-  // refresh = a visible per-tab button that re-probes status (entity tabs only).
-  return { tab: title, name: title, icon, appId, groups, byGroup, entity, refresh: entity ? `${appId}: Refresh` : null };
+  return { tab: title, name: title, icon, appId, groups, byGroup, entity };
 }
 
 const allActions = [];
@@ -115,12 +114,6 @@ for (const app of apps) {
   const dash = dashboardFor(app.id, app.title, app.icon, defs, { entity: entityName(app.id) });
   // "Refresh logs" in the Status section — reuses this app's Tail logs command
   // so you can re-pull the latest log snapshot on demand.
-  const logAct = app.actions.find((a) => /tail logs/i.test(a.label));
-  if (logAct) {
-    const t = `${app.id}: Refresh logs`;
-    allActions.push({ title: t, shell: `cd ${app.dir} && ${logAct.cmd}`, icon: "📜", popupOnStart: POPUP.output, timeout: 600 });
-    dash.refreshLogs = t;
-  }
   // "Watch logs (Warp)" — opens a Warp tab live-tailing the log. Live streaming
   // belongs in a terminal, not in OliveTin (which can't hold a stream open).
   if (app.log) {
@@ -153,20 +146,6 @@ function buildHomeDashboard(dashboards) {
   const html = `<div class='project-home'>${cards}</div>`;
   return { tab: HOME_TAB, home: true, html, icon: "🏠" };
 }
-// A visible "Refresh" button per entity tab — re-runs the status probe (via the
-// hidden status: Refresh trigger) so you can update the page on demand.
-for (const d of allDashboards) {
-  if (!d.refresh) continue;
-  allActions.push({
-    title: d.refresh,
-    shell: 'echo "Status refreshed."',
-    icon: "🔄",
-    popupOnStart: POPUP.output,
-    timeout: 20,
-    triggers: [REFRESH_TITLE],
-  });
-}
-
 allDashboards.unshift(buildHomeDashboard(allDashboards.slice()));
 
 // ---------------------------------------------------------------------------
@@ -244,8 +223,6 @@ function emitDashboards(dashboards) {
       out += `          - type: display\n`;
       out += `            cssClass: ${q(`status-{{ ${d.entity}.state }}`)}\n`;
       out += `            title: ${q(`{{ ${d.entity}.label }}`)}\n`;
-      if (d.refresh) out += `          - title: ${q(d.refresh)}\n`;
-      if (d.refreshLogs) out += `          - title: ${q(d.refreshLogs)}\n`;
       if (d.watchLogs) out += `          - title: ${q(d.watchLogs)}\n`;
     }
     for (const group of d.groups) {
@@ -333,7 +310,7 @@ function buildProbeScript(olivetinDir) {
     "",
     "add_dot() { # navIndex color",
     '  DOTS="$DOTS',
-    'nav.mainnav ul.navigation-links li:nth-child($1) > a::after { content: \\"\\\\25CF\\"; margin-left: auto; padding-left: .5em; font-size: .8em; color: $2; }"',
+    'nav.mainnav ul.navigation-links li:nth-child($1) > a::after { content: \\"\\\\25CF\\"; position: absolute; right: .7em; top: 50%; transform: translateY(-50%); font-size: .8em; color: $2; }"',
     "}",
     "",
     "emit() { # entityName appDir navIndex",
@@ -413,7 +390,8 @@ nav.mainnav a {
   gap: .6rem;
   width: 100%;
   box-sizing: border-box;
-  padding: .55rem .8rem;
+  position: relative;          /* anchor for the right-aligned status dot */
+  padding: .55rem 1.6rem .55rem .8rem; /* room on the right for the dot */
   border-radius: 12px;
   color: #1c1c1e;
   font-size: 1rem;
