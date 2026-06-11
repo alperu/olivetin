@@ -85,7 +85,8 @@ function dashboardFor(appId, title, icon, defs, { entity } = {}) {
     byGroup.get(a.group).push(a);
   }
   // tab = clean route/display title; icon kept separately for the Home cards.
-  return { tab: title, name: title, icon, appId, groups, byGroup, entity };
+  // refresh = a visible per-tab button that re-probes status (entity tabs only).
+  return { tab: title, name: title, icon, appId, groups, byGroup, entity, refresh: entity ? `${appId}: Refresh` : null };
 }
 
 const allActions = [];
@@ -133,6 +134,20 @@ function buildHomeDashboard(dashboards) {
   const html = `<div class='project-home'>${cards}</div>`;
   return { tab: HOME_TAB, home: true, html, icon: "🏠" };
 }
+// A visible "Refresh" button per entity tab — re-runs the status probe (via the
+// hidden status: Refresh trigger) so you can update the page on demand.
+for (const d of allDashboards) {
+  if (!d.refresh) continue;
+  allActions.push({
+    title: d.refresh,
+    shell: 'echo "Status refreshed."',
+    icon: "🔄",
+    popupOnStart: POPUP.output,
+    timeout: 20,
+    triggers: [REFRESH_TITLE],
+  });
+}
+
 allDashboards.unshift(buildHomeDashboard(allDashboards.slice()));
 
 // ---------------------------------------------------------------------------
@@ -210,6 +225,7 @@ function emitDashboards(dashboards) {
       out += `          - type: display\n`;
       out += `            cssClass: ${q(`status-{{ ${d.entity}.state }}`)}\n`;
       out += `            title: ${q(`{{ ${d.entity}.label }}`)}\n`;
+      if (d.refresh) out += `          - title: ${q(d.refresh)}\n`;
     }
     for (const group of d.groups) {
       out += `      - title: ${q(group)}\n`;
