@@ -38,7 +38,10 @@ const DEFAULT_OLIVETIN_DIR = `${process.env.HOME}/.local/opt/olivetin`;
 const REPO_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const THEME_NAME = "mcpstatus";
 const REFRESH_TITLE = "status: Refresh";
-const HOME_TAB = "🏠  Home";
+// Dashboard titles are kept CLEAN (no emoji/double-space): OliveTin's server
+// 404s on emoji routes like /dashboards/%E2%9A%96%EF%B8%8F... but serves the
+// SPA fine for clean paths. Per-app emoji live on the Home cards instead.
+const HOME_TAB = "Home";
 
 // ---------------------------------------------------------------------------
 // Tiny YAML scalar emitter (no deps — we only emit shapes we control).
@@ -52,16 +55,26 @@ const entityName = (id) => id.replace(/[^a-z0-9]/gi, "").toLowerCase() + "status
 // Build actions
 // ---------------------------------------------------------------------------
 function actionsFor(appId, dir, defs, { withStatusTrigger } = {}) {
-  return defs.map((a) => ({
-    title: actionTitle(appId, a.label),
-    shell: `cd ${dir} && ${a.cmd}`,
-    icon: a.icon,
-    popupOnStart: POPUP[a.popup] ?? POPUP.dialog,
-    timeout: 0, // 0 = no timeout; servers are long-running / detached
-    arguments: a.arguments,
-    // Re-probe status immediately after a lifecycle action runs.
-    triggers: withStatusTrigger ? [REFRESH_TITLE] : undefined,
-  }));
+  return defs.map((a) => {
+    // OliveTin treats timeout:0 as its 3s default and SIGKILLs the action.
+    // "Start"/"Run" launchers run a server (often in the foreground, e.g. the
+    // Chrome launcher `exec`s Chrome) so they must be DETACHED — backgrounded
+    // with nohup so the action returns immediately and the process survives.
+    const detach = /^(Start|Run)\b/.test(a.label);
+    const shell = detach
+      ? `cd ${dir} && (nohup ${a.cmd} >/tmp/olivetin-${appId}.log 2>&1 &) ; echo "Launched in background — log: /tmp/olivetin-${appId}.log"`
+      : `cd ${dir} && ${a.cmd}`;
+    return {
+      title: actionTitle(appId, a.label),
+      shell,
+      icon: a.icon,
+      popupOnStart: POPUP[a.popup] ?? POPUP.dialog,
+      timeout: detach ? 20 : 600, // generous so builds/starts don't get killed
+      arguments: a.arguments,
+      // Re-probe status immediately after a lifecycle action runs.
+      triggers: withStatusTrigger ? [REFRESH_TITLE] : undefined,
+    };
+  });
 }
 
 function dashboardFor(appId, title, icon, defs, { entity } = {}) {
@@ -71,15 +84,21 @@ function dashboardFor(appId, title, icon, defs, { entity } = {}) {
     if (!byGroup.has(a.group)) { byGroup.set(a.group, []); groups.push(a.group); }
     byGroup.get(a.group).push(a);
   }
-  return { tab: `${icon}  ${title}`, appId, groups, byGroup, entity };
+  // tab = clean route/display title; icon kept separately for the Home cards.
+  return { tab: title, name: title, icon, appId, groups, byGroup, entity };
 }
 
 const allActions = [];
 const allDashboards = [];
 
 for (const app of apps) {
-  allActions.push(...actionsFor(app.id, app.dir, app.actions, { withStatusTrigger: true }));
-  allDashboards.push(dashboardFor(app.id, app.title, app.icon, app.actions, { entity: entityName(app.id) }));
+  // "Open in IntelliJ" added to every project so you can jump into the code.
+  const defs = [
+    ...app.actions,
+    { group: "Develop", label: "Open in IntelliJ", icon: "🧠", cmd: 'open -a "IntelliJ IDEA" .', popup: "output" },
+  ];
+  allActions.push(...actionsFor(app.id, app.dir, defs, { withStatusTrigger: true }));
+  allDashboards.push(dashboardFor(app.id, app.title, app.icon, defs, { entity: entityName(app.id) }));
 }
 // Chrome MCP tab — no running-state indicator (it's a launcher, not a service).
 allActions.push(...actionsFor("chrome-mcp", chromeMcp.dir, chromeMcp.actions));
@@ -89,15 +108,16 @@ allDashboards.push(dashboardFor("chrome-mcp", chromeMcp.title, chromeMcp.icon, c
 // first project. One clickable card per project, linking to its dashboard.
 // A project's dashboard route is /dashboards/<urlencoded tab title>.
 function buildHomeDashboard(dashboards) {
+  // Client-side nav (pushState+popstate) for an instant switch; the clean href
+  // is the fallback (a full load of a clean /dashboards/<name> path serves the
+  // SPA, which then routes to the dashboard).
+  const onclick = "event.preventDefault();history.pushState({},'',this.getAttribute('href'));dispatchEvent(new PopStateEvent('popstate'));";
   const cards = dashboards.map((d) => {
     const href = `/dashboards/${encodeURIComponent(d.tab)}`;
-    const parts = d.tab.trim().split(/\s+/);
-    const icon = parts[0];
-    const name = parts.slice(1).join(" ");
-    return `<a class='project-card' href='${href}'><span class='ic'>${icon}</span><span class='nm'>${name}</span></a>`;
+    return `<a class='project-card' href='${href}' onclick="${onclick}"><span class='ic'>${d.icon}</span><span class='nm'>${d.tab}</span></a>`;
   }).join("");
   const html = `<div class='project-home'>${cards}</div>`;
-  return { tab: HOME_TAB, home: true, html };
+  return { tab: HOME_TAB, home: true, html, icon: "🏠" };
 }
 allDashboards.unshift(buildHomeDashboard(allDashboards.slice()));
 
@@ -207,7 +227,7 @@ function readServerSettings(olivetinDir) {
 }
 
 function buildConfig(olivetinDir) {
-  const { listen, logLevel } = readServerSettings(olivetinDir);
+  const { listen } = readServerSettings(olivetinDir);
   const refreshAction = {
     title: REFRESH_TITLE,
     shell: `bash ${join(REPO_ROOT, "build", "status-probe.sh")} ${join(olivetinDir, "entities")}`,
@@ -226,7 +246,7 @@ function buildConfig(olivetinDir) {
     `# ============================================================================\n\n` +
     `listenAddressSingleHTTPFrontend: ${listen}\n` +
     // WARN keeps the app window quiet — INFO logs every entity reload and the
-    // per-minute status action. (was: ${logLevel})
+    // per-minute status action.
     `logLevel: "WARN"\n` +
     `themeName: ${THEME_NAME}\n` +
     `themeCacheDisabled: true\n\n`;
@@ -277,50 +297,47 @@ function buildProbeScript(olivetinDir) {
 const THEME_CSS = `/* mcpstatus theme — GENERATED. */
 
 /* ===========================================================================
-   iOS-style left sidebar: reflow the top dashboard nav into a fixed vertical
-   app list shown on every page. Scoped with :has(> ul) so OliveTin's inner
-   component navs (which use flex/divs, not a direct <ul>) are left untouched.
+   iOS-style left sidebar. OliveTin renders <aside class="sidebar"> >
+   <nav class="mainnav"> > <ul class="navigation-links"> as a 60px icon rail
+   behind a hamburger. We pin it open at full width with labels, on every page.
    =========================================================================== */
-nav:has(> ul) {
-  position: fixed;
+aside.sidebar,
+nav.mainnav {
+  position: fixed !important;
   top: 0;
   left: 0;
   bottom: 0;
-  width: 240px;
+  width: 240px !important;
+  min-width: 240px !important;
   box-sizing: border-box;
-  margin: 0;
-  padding: 1rem .6rem;
+  margin: 0 !important;
+  transform: none !important;
+  visibility: visible !important;
+  opacity: 1 !important;
   overflow-y: auto;
-  background: #f2f2f7;
+  background: #f2f2f7 !important;
   border-right: 1px solid #d1d1d6;
-  border-radius: 0;
   z-index: 1000;
 }
-nav:has(> ul)::before {
-  content: "Applications";
-  display: block;
-  padding: .2rem .8rem .7rem;
-  font-size: .72rem;
-  font-weight: 700;
-  letter-spacing: .04em;
-  text-transform: uppercase;
-  color: #8e8e93;
-}
-nav:has(> ul) ul {
+/* Clear OliveTin's ~49px top header so the first item (Home) isn't hidden. */
+nav.mainnav { padding: 60px .6rem 1rem !important; }
+nav.mainnav ul.navigation-links {
   display: flex;
   flex-direction: column;
-  gap: .15rem;
+  gap: .12rem;
+  width: 100%;
   margin: 0;
   padding: 0;
   list-style: none;
 }
-nav:has(> ul) li,
-nav:has(> ul) ul li { display: block; margin: 0; }
-nav:has(> ul) a {
+nav.mainnav li { display: block; width: 100%; margin: 0; }
+nav.mainnav a {
   display: flex;
   align-items: center;
-  gap: .55rem;
-  padding: .6rem .8rem;
+  gap: .6rem;
+  width: 100%;
+  box-sizing: border-box;
+  padding: .55rem .8rem;
   border-radius: 12px;
   color: #1c1c1e;
   font-size: 1rem;
@@ -330,21 +347,19 @@ nav:has(> ul) a {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-nav:has(> ul) a:hover { background: rgba(120,120,128,.16); }
-nav:has(> ul) a.active,
-nav:has(> ul) a.selected,
-nav:has(> ul) a[aria-current="page"] {
-  background: #007aff;
-  color: #fff;
-}
-/* Push page content clear of the fixed sidebar. Scoped to body:has(nav > ul)
-   so if the sidebar ever doesn't apply, the layout falls back cleanly. */
-body:has(nav > ul) main { margin-left: 240px; }
-@media (max-width: 760px) {
-  nav:has(> ul) { width: 60px; padding: 1rem .35rem; }
-  nav:has(> ul)::before { display: none; }
-  nav:has(> ul) a { justify-content: center; padding: .55rem; font-size: 1.2rem; }
-  body:has(nav > ul) main { margin-left: 60px; }
+nav.mainnav a svg { width: 20px; height: 20px; flex: 0 0 20px; }
+nav.mainnav a:hover { background: rgba(120,120,128,.16); }
+nav.mainnav a.active,
+nav.mainnav a.selected,
+nav.mainnav a[aria-current="page"] { background: #007aff; color: #fff; }
+/* Hide the now-redundant hamburger and push content clear of the sidebar. */
+#sidebar-toggler-button { display: none !important; }
+body:has(nav.mainnav) main { margin-left: 240px !important; }
+@media (max-width: 600px) {
+  aside.sidebar, nav.mainnav { width: 60px !important; min-width: 60px !important; }
+  nav.mainnav { padding: 1rem .3rem !important; }
+  nav.mainnav a { justify-content: center; padding: .55rem; }
+  body:has(nav.mainnav) main { margin-left: 60px !important; }
 }
 
 /* Home landing page — grid of clickable project cards. */
@@ -392,6 +407,21 @@ div.display.status-stopped {
 div.display.status-stopped::before { content: "○ "; }
 `;
 
+// Per-app emoji icons in the sidebar, painted on with CSS so the dashboard
+// titles (and therefore the URLs) stay emoji-free. The nav lists dashboards in
+// config order first (Home + apps + Chrome), then OliveTin's built-in links
+// (Entities/Logs/…), so nth-child maps cleanly to our dashboards.
+function buildSidebarIconCss() {
+  let css = "\n/* Per-app emoji icons in the sidebar (URLs stay emoji-free). */\n";
+  allDashboards.forEach((d, i) => {
+    const n = i + 1;
+    const sel = `nav.mainnav ul.navigation-links li:nth-child(${n}) > a`;
+    css += `${sel} svg { display: none; }\n`;
+    css += `${sel}::before { content: "${d.icon}"; font-size: 1.15rem; width: 22px; flex: 0 0 22px; text-align: center; }\n`;
+  });
+  return css;
+}
+
 function installAssets(olivetinDir) {
   // 1. Probe script -> build/
   const buildDir = join(REPO_ROOT, "build");
@@ -403,7 +433,7 @@ function installAssets(olivetinDir) {
   // 2. Theme css -> custom-webui/themes/<THEME_NAME>/theme.css
   const themeDir = join(olivetinDir, "custom-webui", "themes", THEME_NAME);
   mkdirSync(themeDir, { recursive: true });
-  writeFileSync(join(themeDir, "theme.css"), THEME_CSS);
+  writeFileSync(join(themeDir, "theme.css"), THEME_CSS + buildSidebarIconCss());
 
   // 3. Entities dir + seed one probe run so files exist before OliveTin reads them.
   const entDir = join(olivetinDir, "entities");
