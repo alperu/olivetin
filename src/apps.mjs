@@ -48,7 +48,9 @@ export const apps = [
       { group: "Diagnostics", label: "Status",   icon: "📈", cmd: "bash scripts/status-server.sh", popup: "output" },
       { group: "Diagnostics", label: "Tail logs", icon: "📜", cmd: "tail -n 120 logs/server.log 2>/dev/null || echo 'no logs yet'", popup: "output" },
       { group: "Build", label: "Build", icon: "🏗️", cmd: "npm run build", popup: "output" },
-      { group: "Build", label: "PM2 logs", icon: "🪵", cmd: "npm run daemon:logs", popup: "output" },
+      // Non-streaming: `npm run daemon:logs` (pm2 logs) streams forever and would
+      // hold an OliveTin connection until timeout. --nostream prints and exits.
+      { group: "Build", label: "PM2 logs", icon: "🪵", cmd: "pm2 logs fantom-mcp --lines 150 --nostream", popup: "output" },
     ],
   },
   {
@@ -64,7 +66,10 @@ export const apps = [
       { group: "Diagnostics", label: "Status",    icon: "📈", cmd: "bash scripts/status-server.sh", popup: "output" },
       { group: "Diagnostics", label: "Tail logs",  icon: "📜", cmd: "tail -n 120 /tmp/axon-mcp-server.log 2>/dev/null || echo 'no logs yet'", popup: "output" },
       { group: "Build", label: "Build", icon: "🏗️", cmd: "npm run build", popup: "output" },
-      { group: "Build", label: "PM2 logs", icon: "🪵", cmd: "npm run daemon:logs", popup: "output" },
+      // Non-streaming snapshot (see Fantom note) — OliveTin actions run to their
+      // timeout regardless of whether the page is open, so streaming would hold
+      // a connection even after you navigate away.
+      { group: "Build", label: "PM2 logs", icon: "🪵", cmd: "pm2 logs axon-mcp --lines 150 --nostream", popup: "output" },
     ],
   },
   {
