@@ -111,7 +111,9 @@ function buildHomeDashboard(dashboards) {
   // Client-side nav (pushState+popstate) for an instant switch; the clean href
   // is the fallback (a full load of a clean /dashboards/<name> path serves the
   // SPA, which then routes to the dashboard).
-  const onclick = "event.preventDefault();history.pushState({},'',this.getAttribute('href'));dispatchEvent(new PopStateEvent('popstate'));";
+  // NB: qualify with window. — in an inline handler, bare dispatchEvent binds
+  // to document, but OliveTin's router listens for popstate on window.
+  const onclick = "event.preventDefault();window.history.pushState({},'',this.getAttribute('href'));window.dispatchEvent(new PopStateEvent('popstate'));";
   const cards = dashboards.map((d) => {
     const href = `/dashboards/${encodeURIComponent(d.tab)}`;
     return `<a class='project-card' href='${href}' onclick="${onclick}"><span class='ic'>${d.icon}</span><span class='nm'>${d.tab}</span></a>`;
