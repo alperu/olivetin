@@ -69,7 +69,9 @@ export const apps = [
   },
   {
     id: "court-lens-mcp",
-    title: "SoundSuite.ai",
+    // No dot in the title: OliveTin's server 404s on /dashboards/<name>.<ext>,
+    // which makes the dashboard hang on "Loading dashboard…" when it re-resolves.
+    title: "SoundSuite AI",
     icon: "⚖️",
     dir: `${HOME}/Code/court-lens-mcp`,
     port: 3000, // Next.js dashboard
