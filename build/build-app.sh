@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# build-app.sh — (re)build build/OliveTin.app from olivetin-launch.sh using
+# Platypus, embedding the OliveTin logo as the app icon. Repeatable.
+#
+# Usage: bash build/build-app.sh
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$HERE"
+
+RES="/Applications/Platypus.app/Contents/Resources"
+PLATYPUS="$RES/platypus_clt"
+LOGO="$HOME/.local/opt/olivetin/webui/assets/OliveTinLogo-180px-DBoTqUbn.png"
+
+[ -x "$PLATYPUS" ] || { echo "Platypus CLI not found at $PLATYPUS"; exit 1; }
+
+# 1. Icon: build a .icns from the OliveTin logo.
+echo "==> building icon"
+rm -rf OliveTin.iconset && mkdir OliveTin.iconset
+for s in 16 32 128 256 512; do
+  sips -z "$s" "$s"       "$LOGO" --out "OliveTin.iconset/icon_${s}x${s}.png"    >/dev/null
+  sips -z $((s*2)) $((s*2)) "$LOGO" --out "OliveTin.iconset/icon_${s}x${s}@2x.png" >/dev/null
+done
+iconutil -c icns OliveTin.iconset -o OliveTin.icns
+
+# 2. ScriptExec: this Platypus install ships it base64-encoded and has no
+#    /usr/local/share/platypus. Decode it locally and pass with -e / -E so we
+#    never need sudo or the "Install Command Line Tool" step.
+echo "==> decoding ScriptExec"
+base64 -d -i "$RES/ScriptExec.b64" > ScriptExec && chmod +x ScriptExec
+
+# 3. Build the .app.
+echo "==> building OliveTin.app"
+chmod +x olivetin-launch.sh
+"$PLATYPUS" \
+  -y -a "OliveTin" -o "None" -p "/bin/bash" \
+  -i "OliveTin.icns" -V "1.0" -u "alper" -I "app.olivetin.launcher" -R \
+  -e "$HERE/ScriptExec" \
+  -E "$RES/MainMenu.nib" \
+  "olivetin-launch.sh" "OliveTin.app"
+
+# 4. Ad-hoc sign so Gatekeeper doesn't complain about a locally-built app.
+echo "==> ad-hoc signing"
+codesign --force --deep -s - OliveTin.app
+
+echo "==> done: $HERE/OliveTin.app"
