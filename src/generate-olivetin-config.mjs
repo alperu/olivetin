@@ -97,7 +97,15 @@ for (const app of apps) {
   const defs = [
     ...app.actions,
     ...(app.port
-      ? [{ group: "Open", label: `Open web UI (:${app.port})`, icon: "🌐", cmd: `open "http://localhost:${app.port}"`, popup: "output" }]
+      ? [{
+          group: "Open",
+          label: `Open web UI (:${app.port})`,
+          icon: "🌐",
+          // Check the port is actually listening before opening, so you don't
+          // get a dead browser tab when the server isn't running.
+          cmd: `if lsof -i :${app.port} -sTCP:LISTEN -t >/dev/null 2>&1; then open "http://localhost:${app.port}"; echo "Opening http://localhost:${app.port}"; else echo "Not running on :${app.port} — start it first."; fi`,
+          popup: "output",
+        }]
       : []),
     { group: "Develop", label: "Open in IntelliJ", icon: "🧠", cmd: 'open -a "IntelliJ IDEA" .', popup: "output" },
   ];
