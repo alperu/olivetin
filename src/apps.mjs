@@ -111,5 +111,9 @@ export const chromeMcp = {
     // Stop the debug Chrome by its unique user-data-dir so we don't touch the
     // user's normal Chrome windows.
     { group: "Launch", label: "Stop Chrome MCP", icon: "⏹️", cmd: 'pkill -f "claude-debug-chrome" && echo "Stopped Chrome MCP" || echo "Chrome MCP not running"', popup: "output" },
+    // Inspect: confirm WHICH Chrome is the MCP/CDP one. The /json/version
+    // endpoint is served by the debug Chrome on port 9222.
+    { group: "Inspect", label: "Open CDP info (:9222)", icon: "🔍", cmd: 'open "http://localhost:9222/json/version"', popup: "output" },
+    { group: "Inspect", label: "Show CDP info (text)", icon: "📋", cmd: 'curl -s http://localhost:9222/json/version || echo "No Chrome MCP on :9222"', popup: "output" },
   ],
 };
