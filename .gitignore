@@ -12,3 +12,8 @@ build/OliveTin.icns
 build/ScriptExec
 build/preview-config.yaml
 build/status-probe.sh
+
+# Docker Management — contain PLAINTEXT credentials, never commit.
+# Copy src/docker-hosts.example.mjs -> src/docker-hosts.mjs and fill in.
+src/docker-hosts.mjs
+build/docker/docker-refresh.sh

@@ -33,6 +33,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { apps, chromeMcp, POPUP } from "./apps.mjs";
+import { dockerHosts } from "./docker-hosts.mjs";
 
 const DEFAULT_OLIVETIN_DIR = `${process.env.HOME}/.local/opt/olivetin`;
 const REPO_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -72,10 +73,18 @@ function actionsFor(appId, dir, defs, { withStatusTrigger } = {}) {
     // "Start"/"Run" launchers run a server (often in the foreground, e.g. the
     // Chrome launcher `exec`s Chrome) so they must be DETACHED — backgrounded
     // with nohup so the action returns immediately and the process survives.
-    const detach = /^(Start|Run)\b/.test(a.label);
+    // detach: false opts out (e.g. remote Docker ops, where we want to SEE the
+    // per-host SSH result in the dialog, not a "launched in background" stub).
+    const detach = a.detach === false ? false : /^(Start|Run)\b/.test(a.label);
+    // dir is optional — Docker Management drives remote hosts and has no cwd.
+    const cd = dir ? `cd ${dir} && ` : "";
+    // OliveTin launched from the Dock app inherits a minimal PATH (no Homebrew),
+    // so node/npm/sshpass aren't found and `bash scripts/start.sh` dies with
+    // "node: No such file or directory". Prefix every action with Homebrew bins.
+    const PATHX = 'export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"; ';
     const shell = detach
-      ? `cd ${dir} && (nohup ${a.cmd} >/tmp/olivetin-${appId}.log 2>&1 &) ; echo "Launched in background — log: /tmp/olivetin-${appId}.log"`
-      : `cd ${dir} && ${a.cmd}`;
+      ? `${PATHX}${cd}(nohup ${a.cmd} >/tmp/olivetin-${appId}.log 2>&1 &) ; echo "Launched in background — log: /tmp/olivetin-${appId}.log"`
+      : `${PATHX}${cd}${a.cmd}`;
     return {
       title: actionTitle(appId, a.label),
       shell,
@@ -144,6 +153,97 @@ for (const app of apps) {
 allActions.push(...actionsFor("chrome-mcp", chromeMcp.dir, chromeMcp.actions, { withStatusTrigger: true }));
 allDashboards.push(dashboardFor("chrome-mcp", chromeMcp.title, chromeMcp.icon, chromeMcp.actions, { entity: entityName("chrome-mcp") }));
 
+// Docker Management tab — bulk start/stop/restart of Docker Desktop on remote
+// machines (grouped All / Windows / Mac, plus per-host buttons). Hosts come from
+// src/docker-hosts.mjs; each button shells docker-ctl.sh over non-interactive
+// SSH so an unreachable host fails fast instead of hanging the action.
+const DOCKER_CTL = join(REPO_ROOT, "build", "docker", "docker-ctl.sh");
+const DOCKER_REFRESH = join(REPO_ROOT, "build", "docker", "docker-refresh.sh");
+const sq = (s) => `'${String(s).replace(/'/g, "'\\''")}'`; // shell single-quote
+// Shared entity merge: `node -e "$JS" file k1 v1 k2 v2 …` updates the given keys
+// in a per-host entity JSON while PRESERVING the others — so the per-minute
+// reachability probe (state/label) and the manual details refresh (version/
+// images) can write the same file without clobbering each other. Defaults keep
+// every field present so the table templates never render blank.
+const ENTITY_MERGE_JS =
+  'const fs=require("fs");const a=process.argv.slice(1);const f=a[0];let o={};' +
+  'try{o=JSON.parse(fs.readFileSync(f))}catch(e){}' +
+  'for(let i=1;i+1<a.length;i+=2){o[a[i]]=a[i+1]}' +
+  'o.state=o.state||"stopped";o.label=o.label||"?";' +
+  'o.version=o.version||"\\u2014";o.images=o.images||"(none)";' +
+  'const n=JSON.stringify(o)+"\\n";let c="";' +
+  'try{c=fs.readFileSync(f,"utf8")}catch(e){}if(c!==n)fs.writeFileSync(f,n)';
+function dockerCmd(os, action, h) {
+  const extra = os === "windows"
+    ? ` ${sq(h.startTask || "StartDocker")} ${sq(h.stopTask || "")} ${sq(h.winUser || "")} ${sq(h.dockerUser || "")}`
+    : "";
+  // Stage-1 SSH password via SSHPASS (sshpass -e). Omit to fall back to keys.
+  const auth = h.password ? `SSHPASS=${sq(h.password)} ` : "";
+  // Stage-2 (Windows): real-account password, used to elevate via PowerShell.
+  const win = os === "windows" && h.winPassword ? `WINPASS=${sq(h.winPassword)} ` : "";
+  return `${auth}${win}bash ${sq(DOCKER_CTL)} ${os} ${action} ${sq(h.user)} ${sq(h.host)}${extra}`;
+}
+// Run every host sequentially with ";" (not "&&") so one failure doesn't abort
+// the rest; the per-host script prints its own ==> header for each.
+function bulkCmd(pairs, action, emptyMsg) {
+  if (!pairs.length) return `echo ${sq(emptyMsg)}`;
+  return pairs.map(([os, h]) => dockerCmd(os, action, h)).join(" ; ");
+}
+const winHosts = (dockerHosts.windows || []).map((h) => ["windows", h]);
+const macHosts = (dockerHosts.mac || []).map((h) => ["mac", h]);
+const VERBS = [["Start", "start", "▶️"], ["Stop", "stop", "⏹️"], ["Restart", "restart", "🔄"]];
+// Per-host status entity (reachability on SSH :22, written by the probe). One
+// per host so each table row colours independently.
+const dockerHostEntity = (h) => entityName(`dockerhost-${h.host}`);
+const dockerHostEntityNames = [...winHosts, ...macHosts].map(([, h]) => dockerHostEntity(h));
+// Bulk buttons stay as grouped cards; per-host control lives in the table below.
+const bulkDefs = [];
+for (const [verb, action, icon] of VERBS) {
+  bulkDefs.push({ group: "All", label: `${verb} all`, icon, popup: "output", detach: false,
+    cmd: bulkCmd([...winHosts, ...macHosts], action, "No hosts configured (edit src/docker-hosts.mjs).") });
+}
+// Manual gather of Docker version + running images into the per-host entities
+// (fills the Version/Running table columns). On demand — no per-minute SSH.
+bulkDefs.push({ group: "All", label: "Refresh details", icon: "🔁", popup: "output", detach: false,
+  cmd: `bash ${sq(DOCKER_REFRESH)}` });
+// Diagnose the "docker ps: permission denied" / wrong-SSH-account problem:
+// shows whoami + docker version + docker ps (with errors) for every host.
+bulkDefs.push({ group: "All", label: "Check access", icon: "🩺", popup: "output", detach: false,
+  cmd: bulkCmd([...winHosts, ...macHosts], "check", "No hosts configured.") });
+// One-time setup: create the StartDocker/StopDocker scheduled tasks (interactive,
+// so schtasks /run launches the GUI in the logged-on session) on Windows hosts.
+bulkDefs.push({ group: "Setup", label: "Create Windows tasks", icon: "🛠️", popup: "output", detach: false,
+  cmd: bulkCmd(winHosts, "create-tasks", "No Windows hosts configured.") });
+// Diagnose Docker install type + how to start it (Desktop vs dockerd service).
+bulkDefs.push({ group: "Setup", label: "Diagnose Windows", icon: "🔬", popup: "output", detach: false,
+  cmd: bulkCmd(winHosts, "diag", "No Windows hosts configured.") });
+for (const [G, pairs] of [["Windows", winHosts], ["Mac", macHosts]]) {
+  for (const [verb, action, icon] of VERBS) {
+    bulkDefs.push({ group: G, label: `${verb} all ${G}`, icon, popup: "output", detach: false,
+      cmd: bulkCmd(pairs, action, `No ${G} hosts configured.`) });
+  }
+}
+// Per-host actions — generated so the table can reference them by title, but NOT
+// placed in any visible group (the table is their only UI).
+const perHostDefs = [];
+const dockerRows = []; // table rows: one per host
+for (const [os, h] of [...winHosts, ...macHosts]) {
+  for (const [verb, action, icon] of VERBS) {
+    perHostDefs.push({ label: `${verb} ${h.name}`, icon, popup: "output", detach: false,
+      cmd: dockerCmd(os, action, h) });
+  }
+  dockerRows.push({
+    name: h.name,
+    os,
+    entity: dockerHostEntity(h),
+    actions: VERBS.map(([verb]) => actionTitle("docker", `${verb} ${h.name}`)),
+  });
+}
+allActions.push(...actionsFor("docker", null, [...bulkDefs, ...perHostDefs], { withStatusTrigger: true }));
+const dockerDash = dashboardFor("docker", "Docker Management", "🐳", bulkDefs, { entity: entityName("docker") });
+dockerDash.tableRows = dockerRows; // rendered as a status+buttons table by emitDashboards
+allDashboards.push(dockerDash);
+
 // Home landing page — FIRST dashboard so OliveTin opens here instead of the
 // first project. One clickable card per project, linking to its dashboard.
 // A project's dashboard route is /dashboards/<urlencoded tab title>.
@@ -206,7 +306,7 @@ function emitActions(actions, refreshAction) {
 
 function emitEntities(olivetinDir) {
   let out = "entities:\n";
-  const names = [...apps.map((a) => entityName(a.id)), entityName("chrome-mcp")];
+  const names = [...apps.map((a) => entityName(a.id)), entityName("chrome-mcp"), entityName("docker"), ...dockerHostEntityNames];
   for (const name of names) {
     out += `  - file: ${q(join(olivetinDir, "entities", `${name}.json`))}\n`;
     out += `    name: ${name}\n`;
@@ -252,6 +352,36 @@ function emitDashboards(dashboards) {
       out += `            title: ${q(`<strong>━━ ${group} ━━</strong>`)}\n`;
       for (const a of d.byGroup.get(group)) {
         out += `          - title: ${q(actionTitle(d.appId, a.label))}\n`;
+      }
+    }
+    // Per-host table (Docker Management): each host is a fieldset row laid out by
+    // the theme CSS as Host · Status · Start · Stop · Restart. A `.dh-status`
+    // marker class scopes the table CSS (fieldsets carry no class of their own).
+    if (d.tableRows && d.tableRows.length) {
+      // Header row — inert displays so columns line up with the rows below.
+      out += `      - title: ${q("Host")}\n`;
+      out += `        type: fieldset\n`;
+      out += `        contents:\n`;
+      for (const h of ["Status", "Version", "Running", "Start", "Stop", "Restart"]) {
+        out += `          - type: display\n`;
+        out += `            cssClass: ${q(`dh-head${h === "Status" ? " dh-status" : ""}`)}\n`;
+        out += `            title: ${q(h)}\n`;
+      }
+      for (const row of d.tableRows) {
+        out += `      - title: ${q(row.name)}\n`;
+        out += `        type: fieldset\n`;
+        out += `        entity: ${row.entity}\n`;
+        out += `        contents:\n`;
+        out += `          - type: display\n`;
+        out += `            cssClass: ${q(`dh-status status-{{ ${row.entity}.state }}`)}\n`;
+        out += `            title: ${q(`{{ ${row.entity}.label }}`)}\n`;
+        out += `          - type: display\n`;
+        out += `            cssClass: ${q("dh-ver")}\n`;
+        out += `            title: ${q(`{{ ${row.entity}.version }}`)}\n`;
+        out += `          - type: display\n`;
+        out += `            cssClass: ${q("dh-img")}\n`;
+        out += `            title: ${q(`{{ ${row.entity}.images }}`)}\n`;
+        for (const t of row.actions) out += `          - title: ${q(t)}\n`;
       }
     }
     out += "\n";
@@ -317,6 +447,9 @@ function buildProbeScript(olivetinDir) {
     "#    the proxy has it loaded. The standalone server is the one on the port.",
     "#  * Portless apps (stdio-only, e.g. Sedona) fall back to cwd detection — note",
     "#    that while the proxy is up it keeps such a child alive, so it reads RUNNING.",
+    "",
+    "# OliveTin's action PATH omits Homebrew; add it so node (entity merge) resolves.",
+    'export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"',
     "",
     `ENT_DIR="\${1:-${join(olivetinDir, "entities")}}"`,
     `THEME_DIR="\${2:-${join(olivetinDir, "custom-webui", "themes", THEME_NAME)}}"`,
@@ -390,6 +523,25 @@ function buildProbeScript(olivetinDir) {
   lines.push(`add_dot ${apps.length + 2} "$ccolor"`);
   lines.push(`STATUS_JSON="$STATUS_JSON{\\"idx\\":${apps.length + 2},\\"state\\":\\"$cs\\"}"`);
   lines.push("");
+  // Docker Management — dot = SSH reachability (host up, NOT "Docker running").
+  // Green only when EVERY configured host answers on :22; label shows "up/total".
+  const dockerProbeHosts = [...(dockerHosts.windows || []), ...(dockerHosts.mac || [])];
+  lines.push("# Docker Management — per-host SSH :22 reachability. Each host writes its");
+  lines.push("# own entity (the table-row colour); the aggregate drives the sidebar dot.");
+  lines.push(`dtot=${dockerProbeHosts.length}; dup=0`);
+  for (const h of dockerProbeHosts) {
+    const ent = dockerHostEntity(h);
+    lines.push(`if nc -z -w 2 '${h.host}' 22 >/dev/null 2>&1; then hs=running; hl=UP; dup=$((dup+1)); else hs=stopped; hl=DOWN; fi`);
+    // Merge state/label, keep version/images (set by the Refresh details button).
+    lines.push(`node -e '${ENTITY_MERGE_JS}' "$ENT_DIR/${ent}.json" state "$hs" label "$hl"`);
+  }
+  lines.push('if [ "$dtot" -gt 0 ] && [ "$dup" -eq "$dtot" ]; then ds=running; dcolor="$GREEN"; else ds=stopped; dcolor="$RED"; fi');
+  lines.push(`dfile="$ENT_DIR/${entityName("docker")}.json"`);
+  lines.push('dnew=$(printf \'{"state":"%s","label":"%s hosts up"}\' "$ds" "$dup/$dtot")');
+  lines.push('if [ "$dnew" != "$(cat "$dfile" 2>/dev/null)" ]; then printf \'%s\\n\' "$dnew" > "$dfile"; fi');
+  lines.push(`add_dot ${apps.length + 3} "$dcolor"`);
+  lines.push(`STATUS_JSON="$STATUS_JSON,{\\"idx\\":${apps.length + 3},\\"state\\":\\"$ds\\"}"`);
+  lines.push("");
   lines.push("# Write the sidebar dot CSS (only when it changed, to avoid churn).");
   lines.push('df="$THEME_DIR/status-dots.css"');
   lines.push('if [ "$DOTS" != "$(cat "$df" 2>/dev/null)" ]; then printf \'%s\\n\' "$DOTS" > "$df"; fi');
@@ -399,6 +551,49 @@ function buildProbeScript(olivetinDir) {
   lines.push('sf="$THEME_DIR/status.json"');
   lines.push('snew="[$STATUS_JSON]"');
   lines.push('if [ "$snew" != "$(cat "$sf" 2>/dev/null)" ]; then printf \'%s\\n\' "$snew" > "$sf"; fi');
+  lines.push("");
+  return lines.join("\n");
+}
+
+// docker-refresh.sh — GENERATED. Run by the "Refresh details" button. SSHes each
+// host for `docker version` + the images of currently-running containers and
+// merges them into that host's entity JSON (preserving state/label). Passwords
+// are baked in (stored-password mode); keep this repo private.
+function buildDockerRefreshScript(olivetinDir) {
+  const entDir = join(olivetinDir, "entities");
+  const allHosts = [
+    ...(dockerHosts.windows || []).map((h) => ["windows", h]),
+    ...(dockerHosts.mac || []).map((h) => ["mac", h]),
+  ];
+  const lines = [
+    "#!/usr/bin/env bash",
+    "# docker-refresh.sh — GENERATED by generate-olivetin-config.mjs. Do not edit.",
+    "# Reuses docker-ctl.sh's `info` action (which handles stage-1 SSH + stage-2",
+    "# Windows elevation in one place) and merges the result into each entity.",
+    "set -u",
+    '# OliveTin\'s action PATH omits Homebrew; add it so sshpass/node resolve.',
+    'export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"',
+    `ENT_DIR=${sq(entDir)}`,
+    `CTL=${sq(DOCKER_CTL)}`,
+    "",
+    "gather() { # os user host entityName winUser   (SSHPASS / WINPASS exported)",
+    '  local os="$1" user="$2" host="$3" ef="$ENT_DIR/$4.json" winUser="$5" out ver imgs',
+    '  out=$(bash "$CTL" "$os" info "$user" "$host" "" "" "$winUser" 2>/dev/null)',
+    `  ver=$(printf '%s' "$out" | sed -n 's/^VERSION=//p' | head -1); [ -z "$ver" ] && ver="-"`,
+    `  imgs=$(printf '%s' "$out" | sed -n 's/^IMAGES=//p' | head -1); [ -z "$imgs" ] && imgs="(none)"`,
+    `  node -e '${ENTITY_MERGE_JS}' "$ef" version "$ver" images "$imgs"`,
+    '  echo "  $host -> v$ver | $imgs"',
+    "}",
+    "",
+    'echo "Refreshing Docker details (version + running images)…"',
+  ];
+  for (const [os, h] of allHosts) {
+    const ent = dockerHostEntity(h);
+    const pw = h.password ? `SSHPASS=${sq(h.password)} ` : "";
+    const win = os === "windows" && h.winPassword ? `WINPASS=${sq(h.winPassword)} ` : "";
+    lines.push(`${pw}${win}gather ${os} ${sq(h.user)} ${sq(h.host)} ${ent} ${sq(h.winUser || "")}`);
+  }
+  lines.push('echo "Done."');
   lines.push("");
   return lines.join("\n");
 }
@@ -526,6 +721,64 @@ div.display.status-stopped::before { content: "○ "; }
 
 /* The hidden poller bootstrap (<img onerror>) — take it out of the layout. */
 div.display.dots-injector { display: none !important; }
+
+/* ===========================================================================
+   Docker Management host table. Each host is a fieldset "row"; the .dh-status
+   marker class (unique to these rows) scopes the layout via :has() — fieldsets
+   carry no class of their own. Fixed-px inner columns so rows align like a
+   table (a nested grid's tracks only line up across siblings at fixed widths).
+   =========================================================================== */
+.dashboard-row:has(.dh-status) {
+  display: grid;
+  grid-template-columns: 200px 1fr;
+  align-items: center;
+  gap: .6rem;
+  margin: 0;
+  padding: .2rem .5rem;
+  border-bottom: 1px solid #d1d1d6;
+}
+.dashboard-row:has(.dh-status) > h2 { margin: 0; font-size: .9rem; font-weight: 600; }
+.dashboard-row:has(.dh-status) > h2 > span { all: unset; }
+.dashboard-row:has(.dh-status) > fieldset {
+  display: grid;
+  grid-template-columns: 74px 70px 240px 92px 92px 92px;
+  align-items: center;
+  gap: .4rem;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  min-height: 0;
+}
+.dashboard-row:has(.dh-status) .display.dh-status {
+  margin: 0;
+  padding: 0;
+  font-size: .82rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+/* Version + running-images cells (filled by the Refresh details button). */
+.dashboard-row:has(.dh-status) .display.dh-ver {
+  margin: 0; padding: 0; font-size: .8rem; font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.dashboard-row:has(.dh-status) .display.dh-img {
+  margin: 0; padding: 0 .3rem 0 0; font-size: .76rem; color: #444;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.dashboard-row:has(.dh-status) .action-button { margin: 0; }
+/* Smaller, denser buttons inside the table than the big group cards. */
+.dashboard-row:has(.dh-status) .action-button button {
+  width: 100%;
+  min-width: 0;
+  padding: .35rem .4rem;
+  font-size: .82rem;
+}
+.dashboard-row:has(.dh-status) .action-button button img,
+.dashboard-row:has(.dh-status) .action-button button .icon { display: none; }
+/* Header row — bold labels, no status colour/bullet. */
+.dashboard-row:has(.dh-head) { border-bottom: 2px solid #b0b0b8; }
+.display.dh-head { font-weight: 700; color: #555; font-size: .8rem; }
+.display.dh-head.dh-status::before { content: none !important; }
 `;
 
 // dots.js — live-paints the sidebar running/stopped dots by polling status.json
@@ -607,6 +860,12 @@ function installAssets(olivetinDir) {
   const probePath = join(buildDir, "status-probe.sh");
   writeFileSync(probePath, buildProbeScript(olivetinDir));
   chmodSync(probePath, 0o755);
+  // Docker "Refresh details" gather script (version + running images).
+  const dockerDir = join(buildDir, "docker");
+  mkdirSync(dockerDir, { recursive: true });
+  const refreshPath = join(dockerDir, "docker-refresh.sh");
+  writeFileSync(refreshPath, buildDockerRefreshScript(olivetinDir));
+  chmodSync(refreshPath, 0o755);
 
   // 2. Theme css -> custom-webui/themes/<THEME_NAME>/theme.css
   const themeDir = join(olivetinDir, "custom-webui", "themes", THEME_NAME);
