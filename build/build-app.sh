@@ -14,13 +14,22 @@ LOGO="$HOME/.local/opt/olivetin/webui/assets/OliveTinLogo-180px-DBoTqUbn.png"
 
 [ -x "$PLATYPUS" ] || { echo "Platypus CLI not found at $PLATYPUS"; exit 1; }
 
-# 1. Icon: build a .icns from the OliveTin logo.
+# 1. Icon: build a .icns from the committed OliveTin.iconset. If the source
+#    logo is present on this machine, regenerate the iconset from it first
+#    (dev convenience); otherwise the checked-in iconset is used as-is, so a
+#    fresh clone builds without the logo.
 echo "==> building icon"
-rm -rf OliveTin.iconset && mkdir OliveTin.iconset
-for s in 16 32 128 256 512; do
-  sips -z "$s" "$s"       "$LOGO" --out "OliveTin.iconset/icon_${s}x${s}.png"    >/dev/null
-  sips -z $((s*2)) $((s*2)) "$LOGO" --out "OliveTin.iconset/icon_${s}x${s}@2x.png" >/dev/null
-done
+if [ -f "$LOGO" ]; then
+  echo "    regenerating OliveTin.iconset from $LOGO"
+  rm -rf OliveTin.iconset && mkdir OliveTin.iconset
+  for s in 16 32 128 256 512; do
+    sips -z "$s" "$s"       "$LOGO" --out "OliveTin.iconset/icon_${s}x${s}.png"    >/dev/null
+    sips -z $((s*2)) $((s*2)) "$LOGO" --out "OliveTin.iconset/icon_${s}x${s}@2x.png" >/dev/null
+  done
+else
+  echo "    logo not found; using committed OliveTin.iconset"
+  [ -d OliveTin.iconset ] || { echo "OliveTin.iconset missing and no logo to build from"; exit 1; }
+fi
 iconutil -c icns OliveTin.iconset -o OliveTin.icns
 
 # 2. ScriptExec: this Platypus install ships it base64-encoded and has no
