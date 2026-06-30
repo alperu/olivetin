@@ -215,6 +215,17 @@ if [ "$ACTION" = "create-tasks" ]; then
   exit 0
 fi
 
+# `who` (windows) — which user profiles exist and which have a Docker Desktop
+# config (i.e. the account Docker was set up under = the likely dockerUser).
+if [ "$ACTION" = "who" ]; then
+  say "Logged-on sessions (a LOCKED session still shows here as Active):"; remote "quser" 2>&1 || say "  (none logged on)"
+  say "docker-users group members (who is authorized to run Docker = likely the Docker user):"
+  run_ps "try{Get-LocalGroupMember -Group 'docker-users' -ErrorAction Stop | ForEach-Object{'  '+\$_.Name}}catch{'  (could not read docker-users group)'}"
+  say "User profiles on this host (candidates):"
+  run_ps "Get-ChildItem 'C:\\Users' -Directory -ErrorAction SilentlyContinue | ForEach-Object{'  '+\$_.Name}"
+  exit 0
+fi
+
 # `diag` (windows) — what kind of Docker is installed + how to start it headless.
 if [ "$ACTION" = "diag" ]; then
   # The remote shell is PowerShell, where `sc`/`where` are aliases — use .exe.

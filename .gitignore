@@ -16,4 +16,6 @@ build/status-probe.sh
 # Docker Management — contain PLAINTEXT credentials, never commit.
 # Copy src/docker-hosts.example.mjs -> src/docker-hosts.mjs and fill in.
 src/docker-hosts.mjs
+# Backups/copies of the secret file (e.g. docker-hosts.mjs.zip, .bak) — never commit.
+src/docker-hosts.mjs.*
 build/docker/docker-refresh.sh
