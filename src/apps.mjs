@@ -87,10 +87,19 @@ export const apps = [
     port: 3000, // Next.js dashboard
     log: "logs/*.log",
     actions: [
-      { group: "Lifecycle", label: "Start",   icon: "▶️", cmd: "bash scripts/start.sh",   popup: "dialog" },
-      { group: "Lifecycle", label: "Stop",    icon: "⏹️", cmd: "bash scripts/stop.sh",    popup: "dialog" },
-      { group: "Lifecycle", label: "Restart", icon: "🔄", cmd: "bash scripts/restart.sh", popup: "dialog" },
+      // Lifecycle is driven by a launchd user agent (com.soundsuite.dashboard),
+      // NOT by launching start.sh as an OliveTin child. Reason: a backgrounded
+      // child of an OliveTin action dies on SIGHUP/SIGKILL when the action is
+      // reaped (e.g. Restart held start.sh's `tail -f` open until OliveTin's
+      // timeout killed the whole tree). launchd owns the lifecycle instead, so
+      // these buttons just poke launchctl and return instantly (detach:false so
+      // you SEE the result). Run "Install service" once to lay down the plist.
+      { group: "Lifecycle", label: "Start",   icon: "▶️", cmd: "bash scripts/svc-ctl.sh start",   popup: "output", detach: false },
+      { group: "Lifecycle", label: "Stop",    icon: "⏹️", cmd: "bash scripts/svc-ctl.sh stop",    popup: "output", detach: false },
+      { group: "Lifecycle", label: "Restart", icon: "🔄", cmd: "bash scripts/svc-ctl.sh restart", popup: "output", detach: false },
+      { group: "Lifecycle", label: "Install service", icon: "📦", cmd: "bash scripts/svc-ctl.sh install", popup: "output", detach: false },
       { group: "Diagnostics", label: "Health check", icon: "❤️", cmd: "bash scripts/health-check.sh", popup: "output" },
+      { group: "Diagnostics", label: "Service status", icon: "📊", cmd: "bash scripts/svc-ctl.sh status", popup: "output", detach: false },
       { group: "Diagnostics", label: "Tail logs",    icon: "📜", cmd: "tail -n 120 logs/*.log 2>/dev/null || echo 'no logs yet'", popup: "output" },
       // The Chrome-MCP launcher also lives natively in this repo; surfaced here
       // and again on the dedicated Chrome MCP tab.

@@ -176,6 +176,72 @@ mac_start() {
   fi
 }
 
+# ---------------------------------------------------------------------------
+# Sidecar autostart
+# ---------------------------------------------------------------------------
+# Starting Docker Desktop does not start the SoundSuite sidecar: the container
+# has no restart policy, so a host reboot or a Docker restart leaves the master
+# with no sidecar on that host. These helpers close that gap.
+SIDECAR_NAME="${SIDECAR_NAME:-ss-sidecar}"
+# Docker Desktop reports "started" long before the engine accepts connections;
+# on Windows the gap is routinely over a minute. Poll rather than sleep a guess.
+SIDECAR_ENGINE_WAIT_S="${SIDECAR_ENGINE_WAIT_S:-180}"
+
+wait_for_engine() {
+  local waited=0
+  while [ "$waited" -lt "$SIDECAR_ENGINE_WAIT_S" ]; do
+    if remote "docker ps" >/dev/null 2>&1; then
+      say "Docker engine is accepting connections (after ${waited}s)."
+      return 0
+    fi
+    sleep 5
+    waited=$((waited + 5))
+  done
+  say "Docker engine did not become ready within ${SIDECAR_ENGINE_WAIT_S}s — skipping sidecar start."
+  return 1
+}
+
+start_sidecar() {
+  wait_for_engine || return 1
+
+  # Distinguish "running" / "exists but stopped" / "absent". Reporting the wrong
+  # one of these is how an operator ends up debugging a container that was never
+  # created on this host.
+  local state
+  state=$(remote "docker inspect -f '{{.State.Status}}' $SIDECAR_NAME" 2>/dev/null \
+          | tr -d '\r' | tr -d '[:space:]')
+
+  if [ -z "$state" ]; then
+    say "Container '$SIDECAR_NAME' does not exist on this host — nothing to start."
+    say "Create it once with the documented 'docker run' (see court-lens-mcp/CLAUDE.md);"
+    say "this script deliberately does not invent the run arguments."
+    return 1
+  fi
+
+  if [ "$state" = "running" ]; then
+    say "Sidecar '$SIDECAR_NAME' is already running."
+  else
+    say "Sidecar '$SIDECAR_NAME' is '$state' — starting it."
+    if remote "docker start $SIDECAR_NAME"; then
+      say "Started '$SIDECAR_NAME'."
+    else
+      say "FAILED to start '$SIDECAR_NAME'."
+      return 1
+    fi
+  fi
+
+  # The durable half: with a restart policy, Docker itself brings the sidecar up
+  # next time the engine starts and this script's involvement stops mattering.
+  # `unless-stopped` respects an operator who stopped it deliberately, which
+  # `always` would override.
+  if remote "docker update --restart unless-stopped $SIDECAR_NAME" >/dev/null 2>&1; then
+    say "Restart policy set to 'unless-stopped' — Docker will start it next time."
+  else
+    say "Could not set a restart policy (non-fatal; the explicit start above stands)."
+  fi
+  return 0
+}
+
 echo "==> [$OS] $ACTION  $USER_@$HOST"
 if ! reachable; then
   echo "  UNREACHABLE (no SSH on $HOST:22) — skipped."
@@ -251,16 +317,16 @@ fi
 case "$OS" in
   windows)
     case "$ACTION" in
-      start)   win_start ;;
+      start)   win_start && start_sidecar ;;
       stop)    win_stop ;;
-      restart) win_stop; sleep 5; win_start ;;
+      restart) win_stop; sleep 5; win_start && start_sidecar ;;
       *) echo "  unknown action '$ACTION'"; exit 2 ;;
     esac ;;
   mac)
     case "$ACTION" in
-      start)   mac_start ;;
+      start)   mac_start && start_sidecar ;;
       stop)    mac_stop ;;
-      restart) mac_stop; sleep 5; mac_start ;;
+      restart) mac_stop; sleep 5; mac_start && start_sidecar ;;
       *) echo "  unknown action '$ACTION'"; exit 2 ;;
     esac ;;
   *) echo "  unknown os '$OS'"; exit 2 ;;
