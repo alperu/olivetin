@@ -18,3 +18,7 @@ src/docker-hosts.mjs
 # Backups/copies of the secret file (e.g. docker-hosts.mjs.zip, .bak) — never commit.
 src/docker-hosts.mjs.*
 build/docker/docker-refresh.sh
+
+# macOS Finder metadata — generates churn on every directory view.
+.DS_Store
+**/.DS_Store
