@@ -28,6 +28,8 @@ if /usr/sbin/lsof -i ":${PORT}" -sTCP:LISTEN -t >/dev/null 2>&1; then
   ALREADY=1
 else
   # Send OliveTin's verbose log to a file — keep this window clean.
+  # Keep the previous run's log: after a hang or crash it holds the evidence.
+  [ -f "$LOG" ] && mv -f "$LOG" "$LOG.1"
   : > "$LOG"
   "$OT/OliveTin" >"$LOG" 2>&1 &
   OT_PID=$!
