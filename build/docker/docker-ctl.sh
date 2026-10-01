@@ -59,6 +59,108 @@ fi
 
 say() { printf '  %s\n' "$*"; }
 
+# ---------------------------------------------------------------------------
+# Ollama / code-embedding helpers (macOS hosts). Added 2026-09-14 for the
+# jina-code-embeddings remediation (mcpfantom/docs/reports/
+# jina-code-embeddings-ollama-remediation-2026-09-14.md).
+# ---------------------------------------------------------------------------
+JINA_MODEL="hf.co/jinaai/jina-code-embeddings-1.5b-GGUF:Q8_0"
+REPACK_SCRIPT="${REPACK_SCRIPT:-/Users/alper/Code/mcpfantom/scripts/dev/gguf-add-pooling.py}"
+
+# Run a whole bash script on the remote host via stdin (avoids quoting traps).
+run_script() { # reads the script from stdin
+  "${SSH[@]}" -l "$USER_" "$HOST" 'bash -s'
+}
+# scp with the same auth as ssh.
+scp_to() { # local remote
+  if [ -n "${SSHPASS:-}" ]; then
+    sshpass -e scp -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new \
+      -o PreferredAuthentications=password -o PubkeyAuthentication=no "$1" "$USER_@$HOST:$2"
+  else
+    scp -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new "$1" "$USER_@$HOST:$2"
+  fi
+}
+
+# Where Ollama listens, what OLLAMA_HOST is, version, and whether the jina
+# model has the embedding capability (needs <arch>.pooling_type in the GGUF).
+ollama_status() {
+  run_script <<EOF
+export PATH="/opt/homebrew/bin:/usr/local/bin:\$PATH"
+echo "host: \$(hostname) (\$(uname -m))"
+echo "listen: \$(lsof -nP -iTCP:11434 -sTCP:LISTEN 2>/dev/null | awk 'NR>1{print \$9}' | sort -u | tr '\n' ' ')"
+echo "OLLAMA_HOST (launchctl): \$(launchctl getenv OLLAMA_HOST)"
+echo "ollama: \$(ollama --version 2>/dev/null | head -1) | brew service: \$(brew services list 2>/dev/null | awk '/ollama/{print \$2}') | app: \$(pgrep -x Ollama >/dev/null && echo running || echo not-running)"
+echo "model: $JINA_MODEL"
+ollama show '$JINA_MODEL' 2>/dev/null | awk '/Capabilities/{f=1;next} f&&NF{print "  capability:",\$1} f&&!NF{f=0}'
+echo "embed test: \$(curl -s -m 60 localhost:11434/api/embed -d '{"model":"$JINA_MODEL","input":["hello"]}' | head -c 100)"
+EOF
+}
+
+# Bind Ollama to every interface so LAN clients (Fantom) can reach it; the
+# sidecar container reaches it via host.docker.internal either way.
+ollama_expose_lan() {
+  run_script <<'EOF'
+export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+launchctl setenv OLLAMA_HOST 0.0.0.0:11434
+echo "OLLAMA_HOST set to $(launchctl getenv OLLAMA_HOST)"
+if brew services list 2>/dev/null | grep -q '^ollama'; then
+  # brew services runs a launchd job; give it the variable persistently too.
+  brew services stop ollama >/dev/null 2>&1 || true
+  OLLAMA_HOST=0.0.0.0:11434 brew services start ollama >/dev/null 2>&1 && echo "restarted via brew services"
+else
+  osascript -e 'quit app "Ollama"' >/dev/null 2>&1 || true
+  sleep 3
+  open -a Ollama && echo "relaunched Ollama.app"
+fi
+for i in $(seq 1 20); do
+  L=$(lsof -nP -iTCP:11434 -sTCP:LISTEN 2>/dev/null | awk 'NR>1{print $9}' | sort -u | tr '\n' ' ')
+  [ -n "$L" ] && break; sleep 1
+done
+echo "listen now: ${L:-<nothing on 11434>}"
+case "$L" in *'*:11434'*) echo "OK: reachable from the LAN";; *) echo "STILL localhost-only — if the Ollama.app was started manually, quit it fully (menu bar) and reopen; the app reads OLLAMA_HOST at launch";; esac
+EOF
+}
+
+# Re-pack the jina GGUF with qwen2.pooling_type=LAST and register it under the
+# same model name, then verify Ollama grants the embedding capability.
+jina_repack() {
+  if [ ! -f "$REPACK_SCRIPT" ]; then say "re-pack script not found at $REPACK_SCRIPT"; return 1; fi
+  scp_to "$REPACK_SCRIPT" /tmp/gguf-add-pooling.py || { say "scp failed"; return 1; }
+  run_script <<EOF
+set -e
+export PATH="/opt/homebrew/bin:/usr/local/bin:\$PATH"
+echo "== 1. python env"
+[ -d "\$HOME/gguf-venv" ] || python3 -m venv "\$HOME/gguf-venv"
+"\$HOME/gguf-venv/bin/pip" -q install gguf numpy 2>&1 | grep -v "notice" || true
+echo "== 2. locate blob"
+BLOB=\$(ollama show '$JINA_MODEL' --modelfile 2>/dev/null | awk '/^FROM /{print \$2; exit}')
+[ -n "\$BLOB" ] || { echo "model not present locally: $JINA_MODEL"; exit 1; }
+echo "blob: \$BLOB (\$(du -h "\$BLOB" | cut -f1))"
+echo "== 3. re-pack (pooling=last)"
+"\$HOME/gguf-venv/bin/python" /tmp/gguf-add-pooling.py --in "\$BLOB" --out /tmp/jina-code-q8-pooled.gguf --pooling last 2>/dev/null
+echo "== 4. register under the same name"
+printf 'FROM /tmp/jina-code-q8-pooled.gguf\n' > /tmp/Modelfile.jina
+ollama create '$JINA_MODEL' -f /tmp/Modelfile.jina 2>&1 | tail -2
+rm -f /tmp/jina-code-q8-pooled.gguf /tmp/Modelfile.jina
+echo "== 5. verify"
+ollama show '$JINA_MODEL' | awk '/Capabilities/{f=1;next} f&&NF{print "  capability:",\$1} f&&!NF{f=0}'
+echo "embed test: \$(curl -s -m 120 localhost:11434/api/embed -d '{"model":"$JINA_MODEL","input":["hello"]}' | head -c 100)"
+EOF
+}
+
+# Append this Mac's public key to the remote authorized_keys so later actions
+# (and the operator) can use key-based SSH instead of the stored password.
+install_ssh_key() {
+  local pub
+  pub=$(cat "$HOME"/.ssh/id_ed25519.pub 2>/dev/null || cat "$HOME"/.ssh/id_rsa.pub 2>/dev/null)
+  [ -n "$pub" ] || { say "no public key in ~/.ssh (run: ssh-keygen -t ed25519)"; return 1; }
+  run_script <<EOF
+umask 077; mkdir -p ~/.ssh; touch ~/.ssh/authorized_keys
+grep -qF '$pub' ~/.ssh/authorized_keys || echo '$pub' >> ~/.ssh/authorized_keys
+echo "authorized_keys now has \$(wc -l < ~/.ssh/authorized_keys | tr -d ' ') key(s) on \$(hostname)"
+EOF
+}
+
 run() { # run a remote command, tolerate failure
   "${SSH[@]}" -l "$USER_" "$HOST" "$@"
 }
@@ -327,6 +429,10 @@ case "$OS" in
       start)   mac_start && start_sidecar ;;
       stop)    mac_stop ;;
       restart) mac_stop; sleep 5; mac_start && start_sidecar ;;
+      ollama-status) ollama_status ;;
+      ollama-lan)    ollama_expose_lan ;;
+      jina-repack)   jina_repack ;;
+      ssh-key)       install_ssh_key ;;
       *) echo "  unknown action '$ACTION'"; exit 2 ;;
     esac ;;
   *) echo "  unknown os '$OS'"; exit 2 ;;

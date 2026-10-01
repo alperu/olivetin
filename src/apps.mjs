@@ -8,6 +8,9 @@
 // Edit this file and re-run generate-olivetin-config.mjs to update the UI.
 
 const HOME = process.env.HOME;
+// Control script for Jevbridge lives in THIS repo (the Jevbridge clone is
+// third-party and stays pristine so `git pull` never conflicts).
+const JEV_CTL = new URL("../build/jevbridge/jevbridge-ctl.sh", import.meta.url).pathname;
 
 /**
  * popupOnStart presets:
@@ -121,6 +124,25 @@ export const apps = [
       { group: "Devices", label: "List devices", icon: "📟", cmd: "npm run devices:list", popup: "output" },
       { group: "Devices", label: "Device stats", icon: "📊", cmd: "npm run devices:stats", popup: "output" },
       { group: "Devices", label: "Show config",  icon: "⚙️", cmd: "npm run config:list",  popup: "output" },
+    ],
+  },
+  {
+    id: "jevbridge",
+    title: "Jevbridge",
+    icon: "🧭",
+    dir: `${HOME}/Code/Jevbridge`,
+    // STDIO MCP server: no daemon, no port. Claude Code spawns one copy per
+    // session. Start/Stop = register/unregister with Claude Code (user scope);
+    // the tab is green while registered. See build/jevbridge/jevbridge-ctl.sh.
+    statusCmd: `bash ${JEV_CTL} check`,
+    actions: [
+      // detach:false — these return instantly and you want to SEE the result.
+      { group: "Lifecycle", label: "Start",   icon: "▶️", cmd: `bash ${JEV_CTL} start`,   popup: "output", detach: false },
+      { group: "Lifecycle", label: "Stop",    icon: "⏹️", cmd: `bash ${JEV_CTL} stop`,    popup: "output", detach: false },
+      { group: "Lifecycle", label: "Restart", icon: "🔄", cmd: `bash ${JEV_CTL} restart`, popup: "output", detach: false },
+      { group: "Diagnostics", label: "Status", icon: "📈", cmd: `bash ${JEV_CTL} status`, popup: "output" },
+      { group: "Diagnostics", label: "Test",   icon: "🧪", cmd: `bash ${JEV_CTL} test`,   popup: "output" },
+      { group: "Build", label: "Update (git pull)", icon: "⬇️", cmd: `bash ${JEV_CTL} update`, popup: "output" },
     ],
   },
 ];

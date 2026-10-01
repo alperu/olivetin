@@ -223,6 +223,20 @@ for (const [G, pairs] of [["Windows", winHosts], ["Mac", macHosts]]) {
       cmd: bulkCmd(pairs, action, `No ${G} hosts configured.`) });
   }
 }
+// Ollama / code-embedding maintenance on the Macs (host-Ollama sidecar mode).
+// See mcpfantom/docs/reports/jina-code-embeddings-ollama-remediation-2026-09-14.md.
+const OLLAMA_OPS = [
+  ["Ollama status", "ollama-status", "🔎"],
+  ["Ollama: expose on LAN", "ollama-lan", "📡"],
+  ["Jina re-pack (pooling)", "jina-repack", "🧬"],
+  ["Install SSH key", "ssh-key", "🔑"],
+];
+for (const [, h] of macHosts) {
+  for (const [label, action, icon] of OLLAMA_OPS) {
+    bulkDefs.push({ group: `Ollama · ${h.name}`, label: `${label} ${h.name}`, icon, popup: "output", detach: false,
+      cmd: dockerCmd("mac", action, h) });
+  }
+}
 // Per-host actions — generated so the table can reference them by title, but NOT
 // placed in any visible group (the table is their only UI).
 const perHostDefs = [];
@@ -489,11 +503,16 @@ function buildProbeScript(olivetinDir) {
     'nav.mainnav ul.navigation-links li:nth-child($1) > a::after { content: \\"\\\\25CF\\"; position: absolute; right: .7em; top: 50%; transform: translateY(-50%); font-size: .8em; color: $2; }"',
     "}",
     "",
-    "emit() { # entityName appDir navIndex [port]",
-    '  local name="$1" dir="$2" idx="$3" port="${4:-}" state label color new old f',
+    "emit() { # entityName appDir navIndex [port] [statusCmd]",
+    '  local name="$1" dir="$2" idx="$3" port="${4:-}" scmd="${5:-}" state label color new old f',
+    "  # statusCmd given -> running iff it exits 0. For stdio MCPs Claude Code",
+    "  # spawns per session (e.g. Jevbridge), where there is no process to find.",
     "  # Port given -> running iff the port is listening (standalone server only,",
     "  # not the proxy's stdio child). No port -> fall back to cwd detection.",
-    '  if { [ -n "$port" ] && lsof -i ":$port" -sTCP:LISTEN -t >/dev/null 2>&1; } || { [ -z "$port" ] && cwd_running "$dir"; }; then',
+    '  if [ -n "$scmd" ]; then eval "$scmd" >/dev/null 2>&1',
+    '  elif [ -n "$port" ]; then lsof -i ":$port" -sTCP:LISTEN -t >/dev/null 2>&1',
+    '  else cwd_running "$dir"; fi',
+    '  if [ $? -eq 0 ]; then',
     '    state=running; label=RUNNING; color="$GREEN"',
     '  else',
     '    state=stopped; label=STOPPED; color="$RED"',
@@ -511,7 +530,7 @@ function buildProbeScript(olivetinDir) {
   ];
   // nav order: Home is li:nth-child(1), then apps, then Chrome.
   apps.forEach((app, i) => {
-    lines.push(`emit ${entityName(app.id)} "${app.dir}" ${i + 2} "${app.port || ""}"`);
+    lines.push(`emit ${entityName(app.id)} "${app.dir}" ${i + 2} "${app.port || ""}" ${sq(app.statusCmd || "")}`);
   });
   // Chrome MCP: running = a debug Chrome exposing CDP on :9222.
   lines.push("");
