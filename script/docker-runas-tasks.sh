@@ -13,7 +13,7 @@
 # Usage:
 #   SSHPASS='<ssh-password>' script/docker-runas-tasks.sh <host> [ssh-user] [startTask] [stopTask]
 #
-#   host        Windows host (IP or name), e.g. basws41.hq2.bassg.com
+#   host        Windows host (IP or name), e.g. ws01.corp.example.com
 #   ssh-user    admin SSH account used to connect/create tasks (default: dockerAdmin)
 #   startTask   scheduled-task name to create  (default: StartDocker)
 #   stopTask    scheduled-task name to create  (default: StopDocker)

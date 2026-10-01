@@ -41,7 +41,7 @@ Windows account** via PowerShell `-Credential`. That needs **two** credentials:
 
 Set up per Windows host:
 - `winUser`: a local/domain account in the **`docker-users`** group. Qualify it:
-  `HQ2\alper` (domain), `.\localadmin` (local), or `alper@hq2.bassg.com`.
+  `CORP\jdoe` (domain), `.\localadmin` (local), or `jdoe@corp.example.com`.
   Add it: `net localgroup docker-users <winUser> /add` (admin PowerShell; then
   sign that user out/in).
 - That account also needs the **"Log on as a batch job"** right

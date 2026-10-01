@@ -35,7 +35,7 @@ WIN_USER="${7:-}"
 # so the GUI launches in THEIR session. Falls back to the SSH account if unset.
 DOCKER_USER="${8:-}"
 # Username is passed via `-l` (not user@host) so a Windows account that includes
-# a domain/computer qualifier — e.g. HQ2\alper, .\localadmin, alper@hq2.bassg.com
+# a domain/computer qualifier — e.g. CORP\jdoe, .\localadmin, jdoe@corp.example.com
 # — survives intact. Logging in as a real Windows account (not a Bitvise virtual
 # user) is required for Docker engine + service access on Windows.
 
