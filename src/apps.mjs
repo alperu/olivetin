@@ -7,10 +7,33 @@
 // `group` is used to lay buttons out under a labelled divider inside the tab.
 // Edit this file and re-run generate-olivetin-config.mjs to update the UI.
 
+import { readdirSync, existsSync, readFileSync } from "node:fs";
+
 const HOME = process.env.HOME;
 // Control script for Jevbridge lives in THIS repo (the Jevbridge clone is
 // third-party and stays pristine so `git pull` never conflicts).
 const JEV_CTL = new URL("../build/jevbridge/jevbridge-ctl.sh", import.meta.url).pathname;
+// SkySpark: one table row per install found under ~/skyspark at generate time.
+// Re-run the generator after adding or removing an install.
+const SKY_ROOT = `${HOME}/skyspark`;
+const SKY_CTL = new URL("../build/skyspark/skyspark-ctl.sh", import.meta.url).pathname;
+const skysparkVersions = existsSync(SKY_ROOT)
+  ? readdirSync(SKY_ROOT)
+      .filter((d) => d.startsWith("skyspark-") && existsSync(`${SKY_ROOT}/${d}/bin/skyspark`))
+      .map((d) => d.slice("skyspark-".length))
+      .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }))
+  : [];
+// Current httpPort from the var folder (3.x var/host, 4.x var/sys/db) — the
+// default shown in the "Set port" form. Mirrors port_of in skyspark-ctl.sh.
+const skysparkPort = (v) => {
+  for (const f of ["var/host/folio.trio", "var/sys/db/folio.trio"]) {
+    try {
+      const m = readFileSync(`${SKY_ROOT}/skyspark-${v}/${f}`, "utf8").match(/^httpPort:(\d+)/m);
+      if (m) return Number(m[1]);
+    } catch {}
+  }
+  return 8080;
+};
 
 /**
  * popupOnStart presets:
@@ -125,6 +148,44 @@ export const apps = [
       { group: "Devices", label: "Device stats", icon: "📊", cmd: "npm run devices:stats", popup: "output" },
       { group: "Devices", label: "Show config",  icon: "⚙️", cmd: "npm run config:list",  popup: "output" },
     ],
+  },
+  {
+    id: "skyspark",
+    title: "SkySpark",
+    icon: "📡",
+    iconImg: new URL("../build/skyspark/skyspark-logo.png", import.meta.url).pathname,
+    dir: SKY_ROOT,
+    // Green while any install's JVM is up. Per-install state is in the table.
+    statusCmd: `bash ${SKY_CTL} any`,
+    actions: [],
+    develop: [
+      { label: "Open axon-library in IntelliJ", path: `${HOME}/Code/axon_library_2025/axon-library` },
+      { label: "Open axon-mcp-server/proj in IntelliJ", path: `${HOME}/Code/axon-mcp-server/proj` },
+    ],
+    // Rendered as a table: Version · Status · Port · Start · Stop · Restart · Status · Open · Folder · Set port.
+    // Port is read from each install's var folder when the button runs.
+    table: {
+      head: ["Status", "Port", "Start", "Stop", "Restart", "Status", "Open", "Folder", "Set port"],
+      cells: [["dh-status", "label"], ["dh-ver", "port"]], // [cssClass, entity field]
+      // Probe line per row: `<probe> <entityFile> <name>` writes the row entity.
+      probe: `bash ${SKY_CTL} probe`,
+      rows: skysparkVersions.map((v) => ({
+        name: v,
+        actions: [
+          // detach:false — skyspark.sh detaches the JVM itself and returns.
+          { label: `Start ${v}`,   icon: "▶️", cmd: `bash ${SKY_CTL} start '${v}'`,   popup: "output", detach: false },
+          { label: `Stop ${v}`,    icon: "⏹️", cmd: `bash ${SKY_CTL} stop '${v}'`,    popup: "output", detach: false },
+          { label: `Restart ${v}`, icon: "🔄", cmd: `bash ${SKY_CTL} restart '${v}'`, popup: "output", detach: false },
+          { label: `Status ${v}`,  icon: "📈", cmd: `bash ${SKY_CTL} status '${v}'`,  popup: "output", detach: false },
+          { label: `Open ${v}`,    icon: "🌐", cmd: `bash ${SKY_CTL} open '${v}'`,    popup: "output", detach: false },
+          { label: `Folder ${v}`,  icon: "📁", cmd: `bash ${SKY_CTL} folder '${v}'`,  popup: "output", detach: false },
+          // OliveTin shows a form for the argument; the install must be stopped.
+          { label: `Set port ${v}`, icon: "✏️", cmd: `bash ${SKY_CTL} set-port '${v}' {{ port }}`, popup: "output", detach: false,
+            arguments: [{ name: "port", title: `New http port for ${v}`, type: "int", default: skysparkPort(v),
+              description: "Stop this install first. Takes effect on next Start." }] },
+        ],
+      })),
+    },
   },
   {
     id: "jevbridge",

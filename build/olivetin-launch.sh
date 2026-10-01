@@ -44,7 +44,8 @@ fi
 # dashboards hang on "Loading dashboard…". If it's already running, reuse your
 # existing tab.
 if [ -z "$ALREADY" ]; then
-  open "$URL"
+  # Land on Home: since 3000.20 "/" is OliveTin's default "Actions" list.
+  open "$URL/dashboards/Home"
 fi
 
 echo "╭───────────────────────────────────────────────╮"

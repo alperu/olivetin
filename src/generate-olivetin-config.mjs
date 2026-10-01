@@ -29,7 +29,7 @@
 import {
   readFileSync, writeFileSync, existsSync, copyFileSync, mkdirSync, chmodSync,
 } from "node:fs";
-import { join, dirname } from "node:path";
+import { join, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { apps, chromeMcp, POPUP } from "./apps.mjs";
@@ -61,8 +61,12 @@ const INJECT_HTML =
 // ---------------------------------------------------------------------------
 const q = (s) => `"${String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 const actionTitle = (appId, label) => `${appId}: ${label}`;
+const sq = (s) => `'${String(s).replace(/'/g, "'\\''")}'`; // shell single-quote
 // Entity name = template namespace; must be a bare identifier.
 const entityName = (id) => id.replace(/[^a-z0-9]/gi, "").toLowerCase() + "status";
+const tableRowEntity = (appId, rowName) => entityName(`${appId}-${rowName}`);
+// Every per-row entity of the apps that render a table (see apps.mjs `table`).
+const appRowEntityNames = () => apps.flatMap((a) => (a.table ? a.table.rows.map((r) => tableRowEntity(a.id, r.name)) : []));
 
 // ---------------------------------------------------------------------------
 // Build actions
@@ -132,10 +136,27 @@ for (const app of apps) {
           };
         })()]
       : []),
-    { group: "Develop", label: "Open in IntelliJ", icon: "🧠", cmd: 'open -a "IntelliJ IDEA" .', popup: "output" },
+    // `develop` (apps.mjs) replaces the default "open this app's dir" button
+    // with one button per listed folder.
+    ...(app.develop || [{ label: "Open in IntelliJ", path: "." }]).map((d) => (
+      { group: "Develop", label: d.label, icon: "🧠", cmd: `open -a "IntelliJ IDEA" ${sq(d.path)}`, popup: "output" })),
   ];
-  allActions.push(...actionsFor(app.id, app.dir, defs, { withStatusTrigger: true }));
+  // Table rows (e.g. SkySpark installs): their actions exist so the table can
+  // reference them by title, but sit in no visible group.
+  const rowDefs = app.table ? app.table.rows.flatMap((r) => r.actions) : [];
+  allActions.push(...actionsFor(app.id, app.dir, [...defs, ...rowDefs], { withStatusTrigger: true }));
   const dash = dashboardFor(app.id, app.title, app.icon, defs, { entity: entityName(app.id) });
+  dash.iconImg = app.iconImg;
+  if (app.table) {
+    dash.tableHead = app.table.head;
+    dash.tableClass = app.id;
+    dash.tableRows = app.table.rows.map((r) => ({
+      name: r.name,
+      entity: tableRowEntity(app.id, r.name),
+      cells: app.table.cells,
+      actions: r.actions.map((a) => actionTitle(app.id, a.label)),
+    }));
+  }
   // "Refresh logs" in the Status section — reuses this app's Tail logs command
   // so you can re-pull the latest log snapshot on demand.
   // "Watch logs (Warp)" — opens a Warp tab live-tailing the log. Live streaming
@@ -159,7 +180,6 @@ allDashboards.push(dashboardFor("chrome-mcp", chromeMcp.title, chromeMcp.icon, c
 // SSH so an unreachable host fails fast instead of hanging the action.
 const DOCKER_CTL = join(REPO_ROOT, "build", "docker", "docker-ctl.sh");
 const DOCKER_REFRESH = join(REPO_ROOT, "build", "docker", "docker-refresh.sh");
-const sq = (s) => `'${String(s).replace(/'/g, "'\\''")}'`; // shell single-quote
 // Shared entity merge: `node -e "$JS" file k1 v1 k2 v2 …` updates the given keys
 // in a per-host entity JSON while PRESERVING the others — so the per-minute
 // reachability probe (state/label) and the manual details refresh (version/
@@ -250,12 +270,14 @@ for (const [os, h] of [...winHosts, ...macHosts]) {
     name: h.name,
     os,
     entity: dockerHostEntity(h),
+    cells: [["dh-status", "label"], ["dh-ver", "version"], ["dh-img", "images"]],
     actions: VERBS.map(([verb]) => actionTitle("docker", `${verb} ${h.name}`)),
   });
 }
 allActions.push(...actionsFor("docker", null, [...bulkDefs, ...perHostDefs], { withStatusTrigger: true }));
 const dockerDash = dashboardFor("docker", "Docker Management", "🐳", bulkDefs, { entity: entityName("docker") });
 dockerDash.tableRows = dockerRows; // rendered as a status+buttons table by emitDashboards
+dockerDash.tableHead = ["Status", "Version", "Running", "Start", "Stop", "Restart"];
 allDashboards.push(dockerDash);
 
 // Home landing page — FIRST dashboard so OliveTin opens here instead of the
@@ -270,7 +292,8 @@ function buildHomeDashboard(dashboards) {
   const onclick = "event.preventDefault();window.history.pushState({},'',this.getAttribute('href'));window.dispatchEvent(new PopStateEvent('popstate'));";
   const cards = dashboards.map((d) => {
     const href = `/dashboards/${encodeURIComponent(d.tab)}`;
-    return `<a class='project-card' href='${href}' onclick="${onclick}"><span class='ic'>${d.icon}</span><span class='nm'>${d.tab}</span></a>`;
+    const ic = d.iconImg ? `<img src='/custom-webui/themes/${THEME_NAME}/${basename(d.iconImg)}' alt=''>` : d.icon;
+    return `<a class='project-card' href='${href}' onclick="${onclick}"><span class='ic'>${ic}</span><span class='nm'>${d.tab}</span></a>`;
   }).join("");
   const html = `<div class='project-home'>${cards}</div>`;
   return { tab: HOME_TAB, home: true, html, icon: "🏠" };
@@ -320,7 +343,7 @@ function emitActions(actions, refreshAction) {
 
 function emitEntities(olivetinDir) {
   let out = "entities:\n";
-  const names = [...apps.map((a) => entityName(a.id)), entityName("chrome-mcp"), entityName("docker"), ...dockerHostEntityNames];
+  const names = [...apps.map((a) => entityName(a.id)), ...appRowEntityNames(), entityName("chrome-mcp"), entityName("docker"), ...dockerHostEntityNames];
   for (const name of names) {
     out += `  - file: ${q(join(olivetinDir, "entities", `${name}.json`))}\n`;
     out += `    name: ${name}\n`;
@@ -354,7 +377,7 @@ function emitDashboards(dashboards) {
       out += `        entity: ${d.entity}\n`;
       out += `        contents:\n`;
       out += `          - type: display\n`;
-      out += `            cssClass: ${q(`status-{{ ${d.entity}.state }}`)}\n`;
+      out += `            cssClass: ${q(`ord-top status-{{ ${d.entity}.state }}`)}\n`;
       out += `            title: ${q(`{{ ${d.entity}.label }}`)}\n`;
       if (d.watchLogs) out += `          - title: ${q(d.watchLogs)}\n`;
     }
@@ -368,35 +391,35 @@ function emitDashboards(dashboards) {
         out += `          - title: ${q(actionTitle(d.appId, a.label))}\n`;
       }
     }
-    // Per-host table (Docker Management): each host is a fieldset row laid out by
-    // the theme CSS as Host · Status · Start · Stop · Restart. A `.dh-status`
-    // marker class scopes the table CSS (fieldsets carry no class of their own).
+    // Per-row table (Docker hosts, SkySpark installs): each row is a fieldset laid
+    // out by the theme CSS as Name · cells… · buttons. A `.dh-status` marker class
+    // scopes the table CSS (fieldsets carry no class of their own); tableClass
+    // (e.g. "skyspark") lets a table set its own column widths.
     if (d.tableRows && d.tableRows.length) {
+      const tc = d.tableClass ? ` ${d.tableClass}` : "";
       // Header row — inert displays so columns line up with the rows below.
-      out += `      - title: ${q("Host")}\n`;
+      out += `      - title: ${q(d.tableClass ? "Version" : "Host")}\n`;
       out += `        type: fieldset\n`;
       out += `        contents:\n`;
-      for (const h of ["Status", "Version", "Running", "Start", "Stop", "Restart"]) {
+      d.tableHead.forEach((h, i) => {
         out += `          - type: display\n`;
-        out += `            cssClass: ${q(`dh-head${h === "Status" ? " dh-status" : ""}`)}\n`;
+        out += `            cssClass: ${q(`dh-head${i === 0 ? ` dh-status${tc} dh-ord-1` : ""}`)}\n`;
         out += `            title: ${q(h)}\n`;
-      }
-      for (const row of d.tableRows) {
+      });
+      d.tableRows.forEach((row, n) => {
         out += `      - title: ${q(row.name)}\n`;
         out += `        type: fieldset\n`;
         out += `        entity: ${row.entity}\n`;
         out += `        contents:\n`;
-        out += `          - type: display\n`;
-        out += `            cssClass: ${q(`dh-status status-{{ ${row.entity}.state }}`)}\n`;
-        out += `            title: ${q(`{{ ${row.entity}.label }}`)}\n`;
-        out += `          - type: display\n`;
-        out += `            cssClass: ${q("dh-ver")}\n`;
-        out += `            title: ${q(`{{ ${row.entity}.version }}`)}\n`;
-        out += `          - type: display\n`;
-        out += `            cssClass: ${q("dh-img")}\n`;
-        out += `            title: ${q(`{{ ${row.entity}.images }}`)}\n`;
+        for (const [cls, field] of row.cells) {
+          // The status cell also gets the running/stopped colour class.
+          const c = cls === "dh-status" ? `dh-status${tc} dh-ord-${n + 2} status-{{ ${row.entity}.state }}` : cls;
+          out += `          - type: display\n`;
+          out += `            cssClass: ${q(c)}\n`;
+          out += `            title: ${q(`{{ ${row.entity}.${field} }}`)}\n`;
+        }
         for (const t of row.actions) out += `          - title: ${q(t)}\n`;
-      }
+      });
     }
     out += "\n";
   }
@@ -498,9 +521,11 @@ function buildProbeScript(olivetinDir) {
     "  return 1",
     "}",
     "",
+    "# Sidebar link per nav index (1 = Home), matched by href — see navSel.",
+    `NAV_HREF=("" ${allDashboards.map((d, i) => sq(navHref(i + 1))).join(" ")})`,
     "add_dot() { # navIndex color",
     '  DOTS="$DOTS',
-    'nav.mainnav ul.navigation-links li:nth-child($1) > a::after { content: \\"\\\\25CF\\"; position: absolute; right: .7em; top: 50%; transform: translateY(-50%); font-size: .8em; color: $2; }"',
+    'nav.mainnav .navigation-links a[href=\\"${NAV_HREF[$1]}\\"]::after { content: \\"\\\\25CF\\"; position: absolute; right: .7em; top: 50%; transform: translateY(-50%); font-size: .8em; color: $2; }"',
     "}",
     "",
     "emit() { # entityName appDir navIndex [port] [statusCmd]",
@@ -528,8 +553,12 @@ function buildProbeScript(olivetinDir) {
     "}",
     "",
   ];
-  // nav order: Home is li:nth-child(1), then apps, then Chrome.
+  // nav index: Home is 1, then apps, then Chrome, then Docker (see NAV_HREF).
   apps.forEach((app, i) => {
+    // Table rows first (e.g. one per SkySpark install), each its own entity.
+    for (const r of app.table?.rows || []) {
+      lines.push(`${app.table.probe} "$ENT_DIR/${tableRowEntity(app.id, r.name)}.json" ${sq(r.name)}`);
+    }
     lines.push(`emit ${entityName(app.id)} "${app.dir}" ${i + 2} "${app.port || ""}" ${sq(app.statusCmd || "")}`);
   });
   // Chrome MCP: running = a debug Chrome exposing CDP on :9222.
@@ -550,7 +579,9 @@ function buildProbeScript(olivetinDir) {
   lines.push(`dtot=${dockerProbeHosts.length}; dup=0`);
   for (const h of dockerProbeHosts) {
     const ent = dockerHostEntity(h);
-    lines.push(`if nc -z -w 2 '${h.host}' 22 >/dev/null 2>&1; then hs=running; hl=UP; dup=$((dup+1)); else hs=stopped; hl=DOWN; fi`);
+    // macOS nc: -w does not bound the connect; -G does. Without it one dead
+    // host held the probe ~80s, past the 30s action timeout.
+    lines.push(`if nc -z -G 2 -w 2 '${h.host}' 22 >/dev/null 2>&1; then hs=running; hl=UP; dup=$((dup+1)); else hs=stopped; hl=DOWN; fi`);
     // Merge state/label, keep version/images (set by the Refresh details button).
     lines.push(`node -e '${ENTITY_MERGE_JS}' "$ENT_DIR/${ent}.json" state "$hs" label "$hl"`);
   }
@@ -645,7 +676,7 @@ nav.mainnav {
 }
 /* Clear OliveTin's ~49px top header so the first item (Home) isn't hidden. */
 nav.mainnav { padding: 60px .6rem 1rem !important; }
-nav.mainnav ul.navigation-links {
+nav.mainnav .navigation-links {
   display: flex;
   flex-direction: column;
   gap: .12rem;
@@ -679,6 +710,8 @@ nav.mainnav a.selected,
 nav.mainnav a[aria-current="page"] { background: #007aff; color: #fff; }
 /* Hide the now-redundant hamburger and push content clear of the sidebar. */
 #sidebar-toggler-button { display: none !important; }
+/* 3000.20: keep the top header (logo, banners) above the pinned sidebar. */
+body > * header, header { position: relative; z-index: 1001; }
 body:has(nav.mainnav) main { margin-left: 240px !important; }
 @media (max-width: 600px) {
   aside.sidebar, nav.mainnav { width: 60px !important; min-width: 60px !important; }
@@ -723,6 +756,7 @@ div.display.home > * { width: 100% !important; }
   transition: transform .12s;
 }
 .project-home a.project-card:hover .ic { transform: scale(1.06); }
+.project-home a.project-card .ic img { width: 60px; height: 60px; }
 .project-home a.project-card .nm { font-size: .85rem; font-weight: 500; text-align: center; line-height: 1.2; }
 
 /* Per-app running/stopped Status display colors. */
@@ -747,57 +781,80 @@ div.display.dots-injector { display: none !important; }
    carry no class of their own. Fixed-px inner columns so rows align like a
    table (a nested grid's tracks only line up across siblings at fixed widths).
    =========================================================================== */
+/* OliveTin 3000.x loads this theme into @layer theme, so its own unlayered
+   rules (e.g. fieldset grid-template-columns: repeat(auto-fit, 180px)) win
+   over ours whatever the specificity. Hence !important on what they also set.
+   It also re-sorts entity fieldsets server-side, so each row carries a
+   dh-ord-N class and the section becomes a flex column ordered by it. */
+main section:has(.dh-status) { display: flex !important; flex-direction: column; }
+.dashboard-row:has(.ord-top) { order: -1; }
 .dashboard-row:has(.dh-status) {
-  display: grid;
-  grid-template-columns: 200px 1fr;
+  display: grid !important;
+  grid-template-columns: 200px 1fr !important;
   align-items: center;
   gap: .6rem;
-  margin: 0;
+  margin: 0 !important;
   padding: .2rem .5rem;
   border-bottom: 1px solid #d1d1d6;
 }
-.dashboard-row:has(.dh-status) > h2 { margin: 0; font-size: .9rem; font-weight: 600; }
+.dashboard-row:has(.dh-status) > h2 { grid-column: 1 !important; width: auto !important; margin: 0 !important; font-size: .9rem !important; font-weight: 600; text-align: left !important; }
 .dashboard-row:has(.dh-status) > h2 > span { all: unset; }
 .dashboard-row:has(.dh-status) > fieldset {
-  display: grid;
-  grid-template-columns: 74px 70px 240px 92px 92px 92px;
-  align-items: center;
-  gap: .4rem;
-  margin: 0;
-  padding: 0;
-  border: none;
-  background: none;
-  min-height: 0;
+  grid-column: 2 !important;
+  display: grid !important;
+  grid-template-columns: 74px 70px 240px 64px 64px 64px !important;
+  grid-auto-rows: auto !important;
+  justify-content: start !important;
+  align-items: center !important;
+  gap: .4rem !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: none !important;
+  background: none !important;
+  box-shadow: none !important;
+  min-height: 0 !important;
 }
-.dashboard-row:has(.dh-status) .display.dh-status {
-  margin: 0;
-  padding: 0;
-  font-size: .82rem;
-  font-weight: 700;
-  white-space: nowrap;
+/* Cells: plain text, no card look. */
+.dashboard-row:has(.dh-status) .display {
+  margin: 0 !important;
+  padding: 0 !important;
+  min-height: 0 !important;
+  background: none !important;
+  box-shadow: none !important;
+  border: none !important;
+  text-align: left !important;
+  justify-content: flex-start !important;
 }
-/* Version + running-images cells (filled by the Refresh details button). */
-.dashboard-row:has(.dh-status) .display.dh-ver {
-  margin: 0; padding: 0; font-size: .8rem; font-variant-numeric: tabular-nums; white-space: nowrap;
-}
+.dashboard-row:has(.dh-status) .display.dh-status { font-size: .82rem; font-weight: 700; white-space: nowrap; }
+.dashboard-row:has(.dh-status) .display.dh-status::before { content: none !important; }
+/* Version / port + running-images cells. */
+.dashboard-row:has(.dh-status) .display.dh-ver { font-size: .8rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .dashboard-row:has(.dh-status) .display.dh-img {
-  margin: 0; padding: 0 .3rem 0 0; font-size: .76rem; color: #444;
+  padding: 0 .3rem 0 0 !important; font-size: .76rem; color: #444;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.dashboard-row:has(.dh-status) .action-button { margin: 0; }
-/* Smaller, denser buttons inside the table than the big group cards. */
+/* Compact icon-only buttons; the header row names each column. */
+.dashboard-row:has(.dh-status) .action-button { margin: 0 !important; }
 .dashboard-row:has(.dh-status) .action-button button {
-  width: 100%;
-  min-width: 0;
-  padding: .35rem .4rem;
-  font-size: .82rem;
+  width: 100% !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  height: 2.1rem !important;
+  padding: .2rem !important;
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
 }
-.dashboard-row:has(.dh-status) .action-button button img,
-.dashboard-row:has(.dh-status) .action-button button .icon { display: none; }
+.dashboard-row:has(.dh-status) .action-button button .title,
+.dashboard-row:has(.dh-status) .action-button button .navigate-on-start-container { display: none !important; }
+.dashboard-row:has(.dh-status) .action-button button .icon { font-size: 1.1rem !important; margin: 0 !important; }
 /* Header row — bold labels, no status colour/bullet. */
 .dashboard-row:has(.dh-head) { border-bottom: 2px solid #b0b0b8; }
 .display.dh-head { font-weight: 700; color: #555; font-size: .8rem; }
-.display.dh-head.dh-status::before { content: none !important; }
+/* SkySpark installs: Status · Port · Start · Stop · Restart · Status · Open · Folder · Set port. */
+.dashboard-row:has(.dh-status.skyspark) > fieldset {
+  grid-template-columns: 250px 60px 64px 64px 64px 64px 64px 64px 64px !important;
+}
 `;
 
 // dots.js — live-paints the sidebar running/stopped dots by polling status.json
@@ -810,13 +867,16 @@ function buildDotsJs() {
 (function () {
   var THEME = "/custom-webui/themes/${THEME_NAME}/";
   var GREEN = "#1db954", RED = "#e0245e";
+  // Sidebar link per nav index (1 = Home), matched by href — see navSel.
+  var HREFS = ${JSON.stringify(["", ...allDashboards.map((d, i) => navHref(i + 1))])};
   function paint(list) {
     var el = document.getElementById("mcp-dot-style");
     if (!el) { el = document.createElement("style"); el.id = "mcp-dot-style"; document.head.appendChild(el); }
     var css = "";
     for (var i = 0; i < list.length; i++) {
       var o = list[i];
-      css += "nav.mainnav ul.navigation-links li:nth-child(" + o.idx + ") > a::after{" +
+      if (!HREFS[o.idx]) continue;
+      css += "nav.mainnav .navigation-links a[href=\\"" + HREFS[o.idx] + "\\"]::after{" +
              "content:'\\\\25CF';position:absolute;right:.7em;top:50%;" +
              "transform:translateY(-50%);font-size:.8em;color:" +
              (o.state === "running" ? GREEN : RED) + ";}\\n";
@@ -835,17 +895,37 @@ function buildDotsJs() {
 `;
 }
 
+// Sidebar links are matched by href, not position: 3000.20 added an "Actions"
+// item (href "/") above our dashboards, which shifted every nth-child by one.
+// navHref(i) = link of the i-th dashboard, 1-based like the probe's nav index.
+const navHref = (i) => `/dashboards/${allDashboards[i - 1].tab}`;
+const navSel = (i) => `nav.mainnav .navigation-links a[href="${navHref(i)}"]`;
+
+// Table row order: header is dh-ord-1, rows dh-ord-2…; groups keep order 0.
+function buildTableOrderCss() {
+  const max = Math.max(0, ...allDashboards.map((d) => (d.tableRows ? d.tableRows.length + 1 : 0)));
+  let css = "\n/* Table row order (OliveTin re-sorts entity fieldsets). */\n";
+  for (let n = 1; n <= max; n++) css += `.dashboard-row:has(.dh-ord-${n}) { order: ${n}; }\n`;
+  return css;
+}
+
 // Per-app emoji icons in the sidebar, painted on with CSS so the dashboard
-// titles (and therefore the URLs) stay emoji-free. The nav lists dashboards in
-// config order first (Home + apps + Chrome), then OliveTin's built-in links
-// (Entities/Logs/…), so nth-child maps cleanly to our dashboards.
+// titles (and therefore the URLs) stay emoji-free. Each link is matched by its
+// href (navSel), so OliveTin's own nav items never shift the icons.
 function buildSidebarIconCss() {
   let css = "\n/* Per-app emoji icons in the sidebar (URLs stay emoji-free). */\n";
+  // OliveTin's default "Actions" page lists every action not placed in a
+  // plain fieldset (our table-row buttons) — noise, so hide its link.
+  css += `nav.mainnav .navigation-links li:has(> a[href="/"]) { display: none; }\n`;
   allDashboards.forEach((d, i) => {
-    const n = i + 1;
-    const sel = `nav.mainnav ul.navigation-links li:nth-child(${n}) > a`;
+    const sel = navSel(i + 1);
     css += `${sel} svg { display: none; }\n`;
-    css += `${sel}::before { content: "${d.icon}"; font-size: 1.15rem; width: 22px; flex: 0 0 22px; text-align: center; }\n`;
+    if (d.iconImg) {
+      // Image logo (e.g. SkySpark), copied into the theme dir by installAssets.
+      css += `${sel}::before { content: ""; width: 22px; height: 22px; flex: 0 0 22px; background: url("/custom-webui/themes/${THEME_NAME}/${basename(d.iconImg)}") center / contain no-repeat; }\n`;
+    } else {
+      css += `${sel}::before { content: "${d.icon}"; font-size: 1.15rem; width: 22px; flex: 0 0 22px; text-align: center; }\n`;
+    }
   });
   return css;
 }
@@ -889,7 +969,9 @@ function installAssets(olivetinDir) {
   // 2. Theme css -> custom-webui/themes/<THEME_NAME>/theme.css
   const themeDir = join(olivetinDir, "custom-webui", "themes", THEME_NAME);
   mkdirSync(themeDir, { recursive: true });
-  writeFileSync(join(themeDir, "theme.css"), THEME_CSS + buildSidebarIconCss());
+  writeFileSync(join(themeDir, "theme.css"), THEME_CSS + buildTableOrderCss() + buildSidebarIconCss());
+  // Image icons (sidebar + Home card) are served from the theme dir.
+  for (const app of apps) if (app.iconImg) copyFileSync(app.iconImg, join(themeDir, basename(app.iconImg)));
   // Seed status-dots.css so the theme's @import resolves before the first probe.
   const dotsPath = join(themeDir, "status-dots.css");
   if (!existsSync(dotsPath)) writeFileSync(dotsPath, "/* status-dots.css — populated by the status probe. */\n");
